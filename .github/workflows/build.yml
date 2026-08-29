@@ -1,0 +1,112 @@
+name: 编译CR6608固件
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+env:
+  REPO_URL: https://github.com/immortalwrt/immortalwrt.git
+  REPO_BRANCH: openwrt-24.10
+  FEEDS_CONF: feeds.conf.default
+  CONFIG_FILE: .config
+  DIY_P1_SH: scripts/diy-part1.sh
+  DIY_P2_SH: scripts/diy-part2.sh
+  UPLOAD_RELEASE: true
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@main
+
+    - name: 初始化编译环境
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install -y $(curl -fsSL https://raw.githubusercontent.com/immortalwrt/immortalwrt/openwrt-24.10/include/build-essential.txt)
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
+        sudo timedatectl set-timezone "$TZ"
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+
+    - name: 克隆源码
+      working-directory: /workdir
+      run: |
+        df -hT $PWD
+        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+    - name: 加载自定义feeds
+      run: |
+        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
+        chmod +x $DIY_P1_SH
+        cd openwrt
+        $GITHUB_WORKSPACE/$DIY_P1_SH
+
+    - name: 更新feeds
+      run: cd openwrt && ./scripts/feeds update -a
+
+    - name: 安装feeds
+      run: cd openwrt && ./scripts/feeds install -a
+
+    - name: 加载自定义配置
+      run: |
+        [ -e files ] && mv files openwrt/files
+        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
+        chmod +x $DIY_P2_SH
+        cd openwrt
+        $GITHUB_WORKSPACE/$DIY_P2_SH
+
+    - name: 下载DL库
+      run: cd openwrt && make defconfig && make download -j8 && find dl -size -1024c -exec ls -l {} \;
+
+    - name: 编译固件
+      run: |
+        cd openwrt
+        echo -e "$(nproc) thread compile"
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        echo "=================== 编译完成 ==================="
+        ls -la bin/targets/*/*
+
+    - name: 整理固件文件
+      run: |
+        mkdir -p firmware
+        cp -f openwrt/bin/targets/*/*/*squashfs-sysupgrade.bin firmware/CR6608-immortalwrt-squashfs-sysupgrade.bin 2>/dev/null || true
+        cp -f openwrt/bin/targets/*/*/*initramfs-kernel.bin firmware/CR6608-immortalwrt-initramfs-kernel.bin 2>/dev/null || true
+        cp -f openwrt/bin/targets/*/*/*.manifest firmware/ 2>/dev/null || true
+        cd firmware && sha256sum * > sha256sums.txt
+        ls -la
+
+    - name: 上传固件到Release
+      uses: softprops/action-gh-release@v1
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      with:
+        tag_name: CR6608-${{ github.run_number }}
+        files: firmware/*
+        body: |
+          ## 小米CR6608 ImmortalWrt 固件
+          - 源码：ImmortalWrt 24.10
+          - 机型：小米CR6608 (MT7621)
+          - 预装：ZeroTier + DDNSTO + PassWall + OpenClash + 应用商店 + Argon主题
+          - 默认IP：192.168.1.1
+          - 默认密码：qq3429510
+          - 编译时间：${{ env.DATE }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 删除旧的Release
+      uses: dev-drprasad/delete-older-releases@v0.2.1
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      with:
+        keep_latest: 3
+        delete_tags: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
