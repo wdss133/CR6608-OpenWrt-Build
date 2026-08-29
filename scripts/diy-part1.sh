@@ -1,9 +1,7 @@
 #!/bin/bash
 # DIY第一阶段：添加第三方feeds
 
-# 添加PassWall feeds
-echo "src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main" >> feeds.conf.default
-echo "src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main" >> feeds.conf.default
+# 添加PassWall feeds（只需要packages，包含luci-app-passwall和所有依赖）
 echo "src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main" >> feeds.conf.default
 
 # 添加OpenClash feeds
