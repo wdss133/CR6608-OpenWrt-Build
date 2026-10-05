@@ -109,11 +109,25 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
-    - name: 下载DL库
+    - name: 生成配置并校验
       run: |
         cd openwrt
         make defconfig
-        grep -E 'CONFIG_PACKAGE_(xray-core|v2ray-core|v2ray-geodata)' .config
+        echo "===== 代理核心 ====="
+        grep -E '^CONFIG_PACKAGE_(xray-core|v2ray-core|v2ray-geodata)=y' .config || true
+        grep -E '^# CONFIG_PACKAGE_(xray-core|v2ray-core) is not set' .config || true
+        echo "===== SSL 后端（必须只有 1 个 libustream-ssl 变体）====="
+        grep -E '^(CONFIG_PACKAGE_libustream-(openssl|mbedtls|wolfssl)=y|# CONFIG_PACKAGE_libustream-(openssl|mbedtls|wolfssl) is not set)' .config || true
+        cnt=$(grep -cE '^CONFIG_PACKAGE_libustream-(openssl|mbedtls|wolfssl)=y' .config || true)
+        echo "libustream-ssl 变体数量: $cnt"
+        if [ "$cnt" -ne 1 ]; then
+          echo "::error::libustream-ssl 变体数量必须为 1（当前 $cnt），否则 package/install 阶段会因 libustream-ssl.so 撞文件而失败"
+          exit 1
+        fi
+
+    - name: 下载DL库
+      run: |
+        cd openwrt
         make download -j8 || make download -j1 V=s
         find dl -size -1024c -exec ls -l {} \;
 
@@ -122,7 +136,7 @@ jobs:
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 || make -j1 V=s
+        make -j$(nproc) || make -j1 V=s
         echo "=================== 编译完成 ==================="
         ls -la bin/targets/*/*
 
@@ -152,7 +166,7 @@ jobs:
 
     - name: 上传固件到Release
       uses: softprops/action-gh-release@v2
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      if: env.UPLOAD_RELEASE == 'true' && success()
       with:
         tag_name: CR6608-${{ github.run_number }}
         files: firmware/*
@@ -170,7 +184,7 @@ jobs:
 
     - name: 删除旧的Release
       uses: dev-drprasad/delete-older-releases@v0.2.1
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      if: env.UPLOAD_RELEASE == 'true' && success()
       with:
         keep_latest: 3
         delete_tags: true

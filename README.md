@@ -25,6 +25,26 @@
 实际编译的是 **immortalwrt 官方 packages 源中的 `net/xray-core`（25.2.21，go 1.23）**，
 与当前 golang 版本匹配，可正常编译通过。
 
+## 关于 SSL 后端（libustream-ssl）的说明
+`libustream-ssl` 的三个变体 `openssl` / `mbedtls` / `wolfssl` 都会安装同一个文件
+`/lib/libustream-ssl.so`，Makefile 中已声明 `CONFLICTS`，**同一固件里只能存在一个**。
+
+而 `immortalwrt/include/target.mk` 把 `libustream-openssl` 写进了 `DEFAULT_PACKAGES`
+（强制选中），与本固件使用的 `luci-ssl` + `wpad-basic-mbedtls`（mbedtls 后端）冲突，
+会在 `package/install` 阶段直接失败：
+
+```
+check_data_file_clashes: Package libustream-openssl20201210 wants to install file
+  .../root-ramips/lib/libustream-ssl.so
+  But that file is already provided by package libustream-mbedtls20201210
+```
+
+本仓库的处理方式：
+- `scripts/diy-part2.sh` 把 `libustream-openssl` 从 `DEFAULT_PACKAGES` 中删除
+- `.config` 中显式声明 `CONFIG_PACKAGE_libustream-mbedtls=y`
+- workflow 增加「生成配置并校验」步骤，若变体数不等于 1 会**立即失败**（不再等 4 小时）
+
+
 ## 自动编译（GitHub Actions）
 工作流文件：`.github/workflows/build.yml`，三种触发方式：
 
