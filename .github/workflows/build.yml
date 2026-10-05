@@ -1,10 +1,28 @@
 name: 编译CR6608固件
 
 on:
+  # 手动触发（在 Actions 页面点 Run workflow）
   workflow_dispatch:
+    inputs:
+      upload_release:
+        description: '编译完成后上传到 Release'
+        type: boolean
+        default: true
+  # 推送到 main 分支时自动编译（仅在配置/脚本/workflow 变化时触发）
   push:
     branches:
       - main
+    paths:
+      - '.config'
+      - 'scripts/**'
+      - '.github/workflows/build.yml'
+  # 定时自动编译：每月 1 日 18:00 UTC（北京时间每月 2 日 02:00）
+  # 不想定时编译的话，把下面两行删掉即可
+  schedule:
+    - cron: '0 18 1 * *'
+
+permissions:
+  contents: write
 
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt.git
@@ -13,22 +31,28 @@ env:
   CONFIG_FILE: .config
   DIY_P1_SH: scripts/diy-part1.sh
   DIY_P2_SH: scripts/diy-part2.sh
-  UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    # GitHub 单任务上限 360 分钟，留一点余量
+    timeout-minutes: 350
+
+    env:
+      UPLOAD_RELEASE: ${{ github.event.inputs.upload_release != 'false' }}
 
     steps:
     - name: 检出代码
-      uses: actions/checkout@main
+      uses: actions/checkout@v4
 
     - name: 初始化编译环境
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
+        echo "DATE=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo rm -rf /usr/share/swift /usr/local/share/powershell /usr/lib/jvm 2>/dev/null || true
         sudo -E apt-get -qq update
         sudo -E apt-get -qq install -y $(curl -fsSL https://raw.githubusercontent.com/immortalwrt/immortalwrt/openwrt-24.10/include/build-essential.txt)
         sudo -E apt-get -qq autoremove --purge
@@ -36,6 +60,7 @@ jobs:
         sudo timedatectl set-timezone "$TZ"
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
+        df -hT /workdir
 
     - name: 克隆源码
       working-directory: /workdir
@@ -43,6 +68,14 @@ jobs:
         df -hT $PWD
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+    - name: 恢复编译缓存
+      uses: actions/cache@v4
+      with:
+        path: /workdir/openwrt/.ccache
+        key: ${{ runner.os }}-ccache-cr6608-${{ github.run_id }}
+        restore-keys: |
+          ${{ runner.os }}-ccache-cr6608-
 
     - name: 加载自定义feeds
       run: |
@@ -53,6 +86,17 @@ jobs:
 
     - name: 更新feeds
       run: cd openwrt && ./scripts/feeds update -a
+
+    - name: 处理重复包（确保 xray-core 使用官方源版本）
+      run: |
+        cd openwrt
+        # passwall feed 里的 Xray-core 26.x 的 go.mod 要求 go >= 1.27，
+        # 而 immortalwrt openwrt-24.10 自带的 golang 只有 1.23.12，编译必然失败（Error 255）。
+        # 这里删掉 passwall 的重复定义，改用 immortalwrt 官方 packages 中的
+        # net/xray-core（25.2.21，go 1.23），与当前 golang 版本匹配。
+        rm -rf feeds/passwall_packages/xray-core
+        echo "最终采用的 xray-core 来源："
+        grep -E '^PKG_NAME|^PKG_VERSION' feeds/packages/net/xray-core/Makefile
 
     - name: 安装feeds
       run: cd openwrt && ./scripts/feeds install -a
@@ -66,9 +110,15 @@ jobs:
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
     - name: 下载DL库
-      run: cd openwrt && make defconfig && make download -j8 && find dl -size -1024c -exec ls -l {} \;
+      run: |
+        cd openwrt
+        make defconfig
+        grep -E 'CONFIG_PACKAGE_(xray-core|v2ray-core|v2ray-geodata)' .config
+        make download -j8 || make download -j1 V=s
+        find dl -size -1024c -exec ls -l {} \;
 
     - name: 编译固件
+      id: compile
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
@@ -78,25 +128,41 @@ jobs:
 
     - name: 整理固件文件
       run: |
-        mkdir -p firmware
-        cp -f openwrt/bin/targets/*/*/*squashfs-sysupgrade.bin firmware/CR6608-immortalwrt-squashfs-sysupgrade.bin 2>/dev/null || true
-        cp -f openwrt/bin/targets/*/*/*initramfs-kernel.bin firmware/CR6608-immortalwrt-initramfs-kernel.bin 2>/dev/null || true
-        cp -f openwrt/bin/targets/*/*/*.manifest firmware/ 2>/dev/null || true
-        cd firmware && sha256sum * > sha256sums.txt
-        ls -la
+        cd openwrt
+        mkdir -p $GITHUB_WORKSPACE/firmware
+        cp -f bin/targets/*/*/*squashfs-sysupgrade.bin $GITHUB_WORKSPACE/firmware/CR6608-immortalwrt-squashfs-sysupgrade.bin
+        cp -f bin/targets/*/*/*initramfs-kernel.bin $GITHUB_WORKSPACE/firmware/CR6608-immortalwrt-initramfs-kernel.bin 2>/dev/null || true
+        cp -f bin/targets/*/*/*.manifest $GITHUB_WORKSPACE/firmware/ 2>/dev/null || true
+        cd $GITHUB_WORKSPACE/firmware
+        sha256sum * > sha256sums.txt
+        ls -lh
+
+    - name: 校验产物
+      run: |
+        cd $GITHUB_WORKSPACE/firmware
+        test -f CR6608-immortalwrt-squashfs-sysupgrade.bin || { echo "未找到 sysupgrade 固件"; exit 1; }
+        echo "产物校验通过"
+
+    - name: 上传固件到Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: CR6608-OpenWrt
+        path: firmware/*
+        retention-days: 7
 
     - name: 上传固件到Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       with:
         tag_name: CR6608-${{ github.run_number }}
         files: firmware/*
         body: |
           ## 小米CR6608 ImmortalWrt 固件
-          - 源码：ImmortalWrt 24.10
-          - 机型：小米CR6608 (MT7621)
-          - 预装：ZeroTier + DDNSTO + PassWall + OpenClash + 应用商店 + Argon主题
-          - 默认IP：192.168.1.1
+          - 源码：ImmortalWrt 24.10（${{ env.REPO_BRANCH }}）
+          - 机型：小米CR6608（MT7621 + MT7915E AX1800）
+          - 代理核心：xray-core（已移除 v2ray-core）
+          - 预装：ZeroTier + PassWall + OpenClash + iStore 应用商店 + AdGuardHome + Argon 主题
+          - 默认 IP：192.168.1.1
           - 默认密码：qq3429510
           - 编译时间：${{ env.DATE }}
       env:
