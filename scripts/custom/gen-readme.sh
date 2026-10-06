@@ -91,6 +91,22 @@ $(added_block)
 
 上游源码：${SOURCE_REPO}（分支 ${SOURCE_BRANCH}）。
 
+### 6) 上游变化时的自我保护（保证每天都能产出固件）
+上游仓库随时会变，这套脚本对常见变化都做了兜底：
+
+| 上游可能的变化 | 脚本的应对 |
+|---|---|
+| 默认分支改名 / 换分支 | 候选分支自动探测（\`SOURCE_FALLBACK_BRANCHES\`），探测不到才报错 |
+| 第三方仓库把 master 改 main | \`git ls-remote\` 探测实际存在的分支 + 克隆失败重试 3 次 |
+| 插件不支持本机架构 | 读插件 Makefile 的架构白名单与 \`APP_ARCH\` 映射，不支持就跳过并告警 |
+| Go 插件跟进新版 Go（如 ddns-go 6.13+ 要求 go ≥ 1.25） | **自动回退**到与源码树 golang 兼容的版本，现算 \`PKG_HASH\` 写回；找不到才跳过 |
+| 包名写错 / PROVIDES 虚拟名 | defconfig 前后比对，被静默丢弃的包会在日志里列出（warning） |
+| 关键包缺失 | xray-core / geoip / geosite / adguardhome / passwall / openclash / argon / kmod-tun 硬校验，缺失即失败 |
+| 主题被上游换掉 | 幂等切换回 argon，并用 \`uci-defaults\` 兜底 |
+
+> 只要 \`custom/\` 与 \`scripts/custom/\` 这几个文件还在，换分支 / 重新 fork 后都能照旧自动跑；
+> 想加插件只改 \`custom/packages.seed\`。
+
 ## 🚀 刷机
 
 从 \`${PREFIX}-latest\` 下载：

@@ -54,6 +54,7 @@ trap 'rm -rf "$WORK"' EXIT
 PLUGINS_MD="$(ls "$ART_DIR"/*.plugins.md 2>/dev/null | head -n1 || true)"
 SRC_TXT="$(ls "$ART_DIR"/third-party-sources.txt 2>/dev/null | head -n1 || true)"
 COMMIT_TXT="$(ls "$ART_DIR"/source-commit.txt 2>/dev/null | head -n1 || true)"
+PIN_TXT="$(ls "$ART_DIR"/version-pins.txt 2>/dev/null | head -n1 || true)"
 MAN="$(ls "$ART_DIR"/*.manifest 2>/dev/null | head -n1 || true)"
 
 SOURCE_COMMIT="（未知）"
@@ -96,6 +97,17 @@ BODY="$WORK/body.md"
     echo "（无第三方源记录）"
   fi
   echo ""
+  if [ -n "$PIN_TXT" ]; then
+    echo "### 🔧 版本自动回退记录"
+    echo ""
+    echo "以下第三方插件因上游要求更高版本的 Go（源码树 golang 版本有限），"
+    echo "已自动回退到与当前源码树兼容的最新版本："
+    echo ""
+    echo '| 仓库 | 采用的版本 | 版本约束 |'
+    echo '|---|---|---|'
+    awk -F'\t' 'NF>=3{printf "| %s | %s | %s |\n", $1, $2, $3}' "$PIN_TXT"
+    echo ""
+  fi
   echo "### 🗂 Release 保留策略"
   echo "- 每次编译生成一个时间戳 tag：\`${PREFIX}-YYYYMMDD-HHMM\`"
   echo "- 同时更新滚动 \`${LATEST_TAG}\`"

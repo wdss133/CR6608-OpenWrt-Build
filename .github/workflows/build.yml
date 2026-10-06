@@ -130,12 +130,14 @@ jobs:
       run: cd openwrt && ./scripts/feeds install -a
 
     - name: 应用定制（插件清单 / 主题 / 机型 / 第三方插件）
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         cp -f .config openwrt/.config
         cd openwrt
         # 基础默认配置：默认 IP / 密码 / 主机名 / 时区 / WLAN / SSL 后端修复
         $GITHUB_WORKSPACE/scripts/diy-part2.sh
-        # 万能定制：packages.seed + devices.* + 第三方插件（幂等、带兼容性过滤）
+        # 万能定制：packages.seed + devices.* + 第三方插件（幂等、带架构/Go 版本兼容性过滤）
         $GITHUB_WORKSPACE/scripts/custom/customize.sh "$GITHUB_WORKSPACE/custom"
 
     - name: 生成配置并校验
@@ -218,6 +220,7 @@ jobs:
         cp -f bin/targets/*/*/*.manifest "$F/" 2>/dev/null || true
         cp -f $GITHUB_WORKSPACE/ci-out/*.plugins.md "$F/" 2>/dev/null || true
         cp -f $GITHUB_WORKSPACE/ci-out/third-party-sources.txt "$F/" 2>/dev/null || true
+        cp -f $GITHUB_WORKSPACE/ci-out/version-pins.txt "$F/" 2>/dev/null || true
         cp -f $GITHUB_WORKSPACE/ci-out/source-commit.txt "$F/" 2>/dev/null || true
         # 内核版本：从 kmod 包的 ABI 版本号里取（形如 6.6.157-r1）
         grep -m1 -oE '^kmod-nf-conntrack - [0-9][^ ]*' bin/targets/*/*/*.manifest 2>/dev/null \

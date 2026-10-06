@@ -112,6 +112,14 @@ ARCH_NAME="$(target_arch)"
 [ -n "$ARCH_NAME" ] || ARCH_NAME=unknown
 log "目标架构: ${ARCH_NAME}（由 CONFIG_TARGET_ARCH_PACKAGES 推导）"
 
+############################ 通用兼容性工具库 ############################
+# 提供 Go 版本兼容守卫 ensure_go_compatible() 等，详见 lib-compat.sh 头部说明。
+# 作用：第三方 Go 插件跟进新版 Go 导致「requires go >= X」编译失败时，自动回退到兼容版本。
+for lib in "$WORKSPACE/scripts/custom/lib-compat.sh" "$(dirname "${BASH_SOURCE[0]}")/lib-compat.sh"; do
+  if [ -f "$lib" ]; then . "$lib"; break; fi
+done
+command -v ensure_go_compatible >/dev/null 2>&1 || die "无法加载 lib-compat.sh（ensure_go_compatible 未定义）"
+
 ############################ 1. 定制清单写入配置副本 ############################
 
 log "应用定制清单: ${CUSTOM_DIR}/packages.seed"
@@ -188,6 +196,12 @@ if fetch_repo https://github.com/EasyTier/luci-app-easytier.git "$ez_dir" main m
       safe_rm package/easytier/easytier-noweb
       config_set "$MAIN_CONFIG" CONFIG_PACKAGE_easytier y
       config_set "$MAIN_CONFIG" CONFIG_PACKAGE_easytier-noweb n
+      # 源码编译版同样是 Go 包，做同一套 Go 版本守卫
+      if ! ensure_go_compatible package/easytier/easytier/Makefile EasyTier/EasyTier v; then
+        warn "easytier 源码版与当前 golang 不兼容，改用预编译版 easytier-noweb"
+        config_set "$MAIN_CONFIG" CONFIG_PACKAGE_easytier n
+        config_set "$MAIN_CONFIG" CONFIG_PACKAGE_easytier-noweb y
+      fi
     fi
     config_set "$MAIN_CONFIG" CONFIG_PACKAGE_luci-app-easytier y
     log "  已加入 EasyTier（${EASYTIER_VARIANT}，支持 ${ARCH_NAME}）"
@@ -244,9 +258,16 @@ if fetch_repo https://github.com/sirpdboy/luci-app-ddns-go.git "$ddns_dir" main 
   if [ -d "$ddns_dir/ddns-go" ]; then mv "$ddns_dir/ddns-go" package/ddns-go; added=1; fi
   if [ -d "$ddns_dir/luci-app-ddns-go" ]; then mv "$ddns_dir/luci-app-ddns-go" package/luci-app-ddns-go; added=1; fi
   if [ "$added" -eq 1 ]; then
-    config_set "$MAIN_CONFIG" CONFIG_PACKAGE_ddns-go y
-    config_set "$MAIN_CONFIG" CONFIG_PACKAGE_luci-app-ddns-go y
-    log "  已加入 ddns-go"
+    # Go 版本兼容守卫：上游 ddns-go 已要求 go >= 1.25，24.10 只有 1.23 → 自动回退到兼容版本
+    if ensure_go_compatible package/ddns-go/Makefile jeessy2/ddns-go v; then
+      config_set "$MAIN_CONFIG" CONFIG_PACKAGE_ddns-go y
+      config_set "$MAIN_CONFIG" CONFIG_PACKAGE_luci-app-ddns-go y
+      log "  已加入 ddns-go"
+    else
+      warn "ddns-go 与当前 golang 不兼容，本次跳过（luci 界面也一并跳过）"
+      config_set "$MAIN_CONFIG" CONFIG_PACKAGE_ddns-go n
+      config_set "$MAIN_CONFIG" CONFIG_PACKAGE_luci-app-ddns-go n
+    fi
   else
     warn "ddns-go 仓库结构变化，未找到子目录，本次跳过"
   fi
