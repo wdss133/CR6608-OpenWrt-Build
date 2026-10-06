@@ -1,94 +1,86 @@
-# 小米CR6608 OpenWrt/ImmortalWrt 自动编译
+# 小米 CR6608 固件自动编译
 
-## 固件信息
-- 源码：ImmortalWrt 24.10
-- 机型：小米CR6608（MT7621 + MT7915E AX1800）
-- 默认 IP：192.168.1.1
-- 默认密码：qq3429510
-- 默认主题：Argon
+> 本仓库自动同步上游 ImmortalWrt 源码并编译 **小米 CR6608** 固件。
+> 所有定制全部收敛在 **自有文件**（`custom/` + `scripts/custom/`）里，
+> 以「新增文件 + 幂等脚本」实现，上游同步不产生冲突；换分支 / 重新 fork 后照旧可用。
 
-## 预装插件
-- ZeroTier（虚拟组网）
-- PassWall（科学上网，核心为 **xray-core**，已移除 v2ray-core）
-- OpenClash（科学上网）
-- iStore 应用商店
-- AdGuard Home（广告过滤）
-- 动态 DDNS、UPnP、网络唤醒
+## ✅ 本仓库的实际配置
 
-> DDNSTO 官方源码包一度 404 导致编译失败，已移除，刷机后可在 iStore 里自行安装。
+### 1) 编译机型
+只编译下列机型（其余全部关闭，缩短编译时间）：
 
-## 关于 xray-core 的说明
-`openwrt-24.10` 分支自带的 golang 版本是 **1.23.12**，而 passwall feed 中的
-`Xray-core 26.x` 的 `go.mod` 要求 `go >= 1.27`，直接编译必然失败（报错 `Error 255`）。
+- xiaomi_mi-router-cr6608
 
-因此本仓库在 GitHub Actions 的「处理重复包」步骤中删除了 passwall feed 里的重复定义，
-实际编译的是 **immortalwrt 官方 packages 源中的 `net/xray-core`（25.2.21，go 1.23）**，
-与当前 golang 版本匹配，可正常编译通过。
+### 2) 默认主题
+- 默认主题为 **argon**（`luci-theme-argon` + `luci-app-argon-config`），并通过
+  `uci-defaults` 兜底确保首次开机即生效；
+- 已确保 **aurora 主题**（`luci-theme-aurora` / `luci-app-aurora-config`）不存在。
 
-## 关于「包名写错会被静默丢弃」（重要）
-OpenWrt 的 `.config` 里如果写了**不存在的配置符号**（例如把 `PROVIDES` 虚拟名当成包名、
-大小写不符、包在该分支已改名/移除），`make defconfig` **不会报错**，只会把这一行
-悄悄删掉，最后固件里就没有这个包，很难察觉。
+### 3) 内置插件
+（来源：`custom/packages.seed`，增删包只改这一个文件）
 
-本仓库已修正以下这类问题（都是之前被静默丢弃的）：
+- luci-theme-argon
+- luci-app-argon-config
+- kmod-tun
+- easytier-noweb
+- luci-app-easytier
+- zerotier
+- luci-app-zerotier
+- ddns-go
+- luci-app-ddns-go
+- luci-app-store
+- luci-lib-taskd
+- luci-lib-xterm
+- taskd
+- luci-compat
+- luci-lua-runtime
+- luci-app-wechatpush
 
-| 原写法（无效） | 正确写法 | 说明 |
-| --- | --- | --- |
-| `v2ray-geodata` | `v2ray-geoip` + `v2ray-geosite` | `v2ray-geodata` 只是 PROVIDES 虚拟名；geoip/geosite 数据是 PassWall + xray 路由规则必需的 |
-| `AdGuardHome` | `adguardhome` | 真实包名是小写 |
-| `luci-app-adguardhome` | （无，已移除） | 该应用只存在于 luci 的 master 分支，`openwrt-24.10` 分支没有 |
-| `wget` | `wget-ssl` | `wget` 是 PROVIDES 虚拟名 |
-| `tc` | `tc-full` | `tc` 是 PROVIDES 虚拟名 |
-| `iptables` / `ip6tables` | `iptables-nft` | 24.10 中前两者是虚拟名，真实包为 `iptables-nft` |
-| `miniupnpd` | `miniupnpd-nftables` | 真实包带 nftables 后缀 |
-| `nftables` / `fw4` | `nftables-json` / `firewall4` | 前者是 PROVIDES 虚拟名 |
-| `shadowsocks-libev-ss-local/redir` | `shadowsocks-rust-sslocal` | libev 版在 24.10 feeds 里已无对应包 |
-| `pdnsd-alt` / `dynamic-dns-luci` / `luci-lib-tools` / `kmod-flow-offload` / `luci-i18n-opkg-zh-cn` | （已移除） | 24.10 已无同名包 |
+其中第三方插件在编译时**从各自上游仓库拉取最新版**，并在发布说明中记录
+**版本号与上游更新日期**（见下方「发布策略」）。
 
-workflow 的「生成配置并校验」步骤会对比 `make defconfig` 前后的差异，
-把被丢弃的包列出来（warning），并对关键包（xray-core、v2ray-geoip/geosite、
-adguardhome、passwall、openclash）做硬校验，缺失即失败。
+### 4) 发布策略（全自动）
+每次编译后：
 
-> AdGuard Home 没有 LuCI 界面（24.10 分支无 `luci-app-adguardhome`），
-> 刷机后用其自带 Web 面板管理即可：`http://192.168.1.1:3000`。
+- 创建一个**时间戳 tag** 的 Release：`CR6608-YYYYMMDD-HHMM`（北京时间）；
+- 更新滚动 Release `CR6608-latest` —— **下载链接固定**，永远指向最新固件；
+- 自动清理，保留规则（取并集）：
+  `latest` + 最近 **36** 个时间戳版本 + **每月最后一次编译**（月度归档）+ 当天全部编译。
+- 只清理时间戳格式的 `CR6608-YYYYMMDD-HHMM`；其它 tag（含历史运行编号版本如 `CR6608-2`）一律不动，避免误删已有可用固件。
 
-## 关于 SSL 后端（libustream-ssl）的说明
-`libustream-ssl` 的三个变体 `openssl` / `mbedtls` / `wolfssl` 都会安装同一个文件
-`/lib/libustream-ssl.so`，Makefile 中已声明 `CONFLICTS`，**同一固件里只能存在一个**。
+### 5) 自动化
+- 每天**北京时间 21:00**（UTC 13:00）自动同步上游源码并编译（`.github/workflows/build.yml`）；
+- 也可在 Actions 页手动 `Run workflow`（可选是否发布 Release）；
+- 每次编译后自动重新生成这份 README 并提交回仓库。
+- 想换上游源码：改 `.github/workflows/build.yml` 里的 `SOURCE_REPO` / `SOURCE_BRANCH` 即可，脚本会自动探测可用分支。
 
-而 `immortalwrt/include/target.mk` 把 `libustream-openssl` 写进了 `DEFAULT_PACKAGES`
-（强制选中），与本固件使用的 `luci-ssl` + `wpad-basic-mbedtls`（mbedtls 后端）冲突，
-会在 `package/install` 阶段直接失败：
+上游源码：https://github.com/immortalwrt/immortalwrt.git（分支 openwrt-24.10）。
 
-```
-check_data_file_clashes: Package libustream-openssl20201210 wants to install file
-  .../root-ramips/lib/libustream-ssl.so
-  But that file is already provided by package libustream-mbedtls20201210
-```
+## 🚀 刷机
 
-本仓库的处理方式：
-- `scripts/diy-part2.sh` 把 `libustream-openssl` 从 `DEFAULT_PACKAGES` 中删除
-- `.config` 中显式声明 `CONFIG_PACKAGE_libustream-mbedtls=y`
-- workflow 增加「生成配置并校验」步骤，若变体数不等于 1 会**立即失败**（不再等 4 小时）
+从 `CR6608-latest` 下载：
 
+- `CR6608-immortalwrt-squashfs-sysupgrade.bin` —— 已刷过 OpenWrt 时升级用
+  （LuCI「系统 → 备份/刷写固件」，首刷建议不保留配置）；
+- `CR6608-immortalwrt-initramfs-kernel.bin` —— 救砖 / 首次刷入中转用；
+- `sha256sums.txt` —— 校验值（`sha256sum -c sha256sums.txt`）。
 
-## 自动编译（GitHub Actions）
-工作流文件：`.github/workflows/build.yml`，三种触发方式：
+默认地址 **192.168.1.1**，默认密码 **qq3429510**。
 
-| 触发方式 | 说明 |
-| --- | --- |
-| push 到 main | 修改 `.config`、`scripts/**`、workflow 文件后自动编译 |
-| 手动触发 | Actions 页面 → 编译CR6608固件 → Run workflow |
-| 定时编译 | 每月 1 日 18:00 UTC（北京时间每月 2 日 02:00），不需要可删除 workflow 里的 `schedule` 段 |
+## 🔁 换分支 / 重新 fork 后继续使用
 
-编译产物：
-- 同时上传到 Actions 的 Artifact（保留 7 天）
-- 自动发布到 Release（标签 `CR6608-<运行编号>`，仅保留最近 3 个）
+定制全部在自有文件里，迁移时带上这些文件即可：
 
-若 Actions 未自动运行，请在仓库 **Settings → Actions → General** 里把
-「Allow all actions and reusable workflows」选中并保存。
+| 文件 | 作用 |
+|---|---|
+| `.github/workflows/build.yml` | 同步上游 + 编译 + 发布流水线 |
+| `scripts/custom/customize.sh` | 应用全部定制（插件清单 / 主题 / 机型筛选 / 第三方插件拉取与版本表） |
+| `scripts/custom/release.sh` | 时间戳 tag 发布 + `latest` + 保留策略清理 |
+| `scripts/custom/gen-readme.sh` | 生成本 README |
+| `custom/packages.seed` | 新增 / 启用插件清单（改包只改这里） |
+| `custom/devices.include`、`devices.exclude` | 机型白名单 / 黑名单 |
+| `.config` | 基础配置（目标平台、基础包、PassWall 等） |
+| `scripts/diy-part1.sh`、`scripts/diy-part2.sh` | 第三方 feeds / 默认 IP、密码、主机名、WLAN、SSL 后端修复 |
 
-## 固件说明文件
-- `CR6608-immortalwrt-squashfs-sysupgrade.bin`（升级用）
-- `CR6608-immortalwrt-initramfs-kernel.bin`（救砖用）
-- `sha256sums.txt`（校验值）
+---
+_本 README 由 `scripts/custom/gen-readme.sh` 自动生成；要改内容请改脚本或 `custom/` 配置，勿手工大改。_

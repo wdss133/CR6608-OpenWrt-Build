@@ -1,42 +1,49 @@
-name: 编译CR6608固件
+name: CR6608 每日自动编译
 
 on:
-  # 手动触发（在 Actions 页面点 Run workflow）
+  # 手动触发（Actions 页面 Run workflow）
   workflow_dispatch:
     inputs:
       upload_release:
-        description: '编译完成后上传到 Release'
+        description: '发布 Release'
         type: boolean
         default: true
-  # 推送到 main 分支时自动编译（仅在配置/脚本/workflow 变化时触发）
+  # 推送到 main 时自动编译（仅当配置 / 定制 / 脚本 / 工作流变化）
   push:
     branches:
       - main
     paths:
       - '.config'
+      - 'custom/**'
       - 'scripts/**'
       - '.github/workflows/build.yml'
-  # 定时自动编译：每月 1 日 18:00 UTC（北京时间每月 2 日 02:00）
-  # 不想定时编译的话，把下面两行删掉即可
+  # 每天北京时间 21:00（UTC 13:00）自动同步上游源码并编译
   schedule:
-    - cron: '0 18 1 * *'
+    - cron: '0 13 * * *'
 
 permissions:
   contents: write
 
 env:
-  REPO_URL: https://github.com/immortalwrt/immortalwrt.git
-  REPO_BRANCH: openwrt-24.10
-  FEEDS_CONF: feeds.conf.default
-  CONFIG_FILE: .config
-  DIY_P1_SH: scripts/diy-part1.sh
-  DIY_P2_SH: scripts/diy-part2.sh
+  # ===== 上游源码（想换成自己的 fork 就改这两行，例如 https://github.com/wdss133/immortalwrt.git）=====
+  SOURCE_REPO: https://github.com/immortalwrt/immortalwrt.git
+  SOURCE_BRANCH: openwrt-24.10
+  # 分支探测候选：上游改名/换默认分支时自动兜底，不会直接失败
+  SOURCE_FALLBACK_BRANCHES: master main openwrt-23.05
+  # ===== 设备与产物命名 =====
+  DEVICE: xiaomi_mi-router-cr6608
+  ARTIFACT_PREFIX: CR6608
+  RELEASE_PREFIX: CR6608
+  KEEP_RECENT: 36
+  # ===== 定制开关（详见 custom/packages.seed）=====
+  EASYTIER_VARIANT: noweb
+  ZEROTIER_SOURCE: mwarning
+  DEFAULT_THEME: argon
   TZ: Asia/Shanghai
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    # GitHub 单任务上限 360 分钟，留一点余量
     timeout-minutes: 350
 
     env:
@@ -45,16 +52,20 @@ jobs:
     steps:
     - name: 检出代码
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: 初始化编译环境
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
         echo "DATE=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+        mkdir -p "$GITHUB_WORKSPACE/ci-out"
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
         sudo rm -rf /usr/share/swift /usr/local/share/powershell /usr/lib/jvm 2>/dev/null || true
         sudo -E apt-get -qq update
         sudo -E apt-get -qq install -y $(curl -fsSL https://raw.githubusercontent.com/immortalwrt/immortalwrt/openwrt-24.10/include/build-essential.txt)
+        sudo -E apt-get -qq install -y unzip rsync
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
         sudo timedatectl set-timezone "$TZ"
@@ -62,12 +73,30 @@ jobs:
         sudo chown $USER:$GROUPS /workdir
         df -hT /workdir
 
-    - name: 克隆源码
+    - name: 同步上游源码
       working-directory: /workdir
       run: |
-        df -hT $PWD
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        # 分支探测：候选分支里挑第一个真实存在的，上游换默认分支也不会失败
+        pick_branch() {
+          local b
+          for b in "$@"; do
+            if git ls-remote --exit-code --heads "$SOURCE_REPO" "$b" >/dev/null 2>&1; then
+              printf '%s\n' "$b"; return 0
+            fi
+          done
+          return 1
+        }
+        BR="$(pick_branch "$SOURCE_BRANCH" $SOURCE_FALLBACK_BRANCHES || true)"
+        if [ -z "$BR" ]; then
+          BR="$SOURCE_BRANCH"
+          echo "::warning::未能探测到候选分支，仍尝试使用 $BR"
+        fi
+        echo "SOURCE_BRANCH_ACTUAL=$BR" >> $GITHUB_ENV
+        echo "同步上游：$SOURCE_REPO [$BR]"
+        git clone --depth=1 -b "$BR" "$SOURCE_REPO" openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        git -C openwrt rev-parse HEAD > "$GITHUB_WORKSPACE/ci-out/source-commit.txt"
+        echo "上游提交：$(cat "$GITHUB_WORKSPACE/ci-out/source-commit.txt")"
 
     - name: 恢复编译缓存
       uses: actions/cache@v4
@@ -79,10 +108,10 @@ jobs:
 
     - name: 加载自定义feeds
       run: |
-        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
-        chmod +x $DIY_P1_SH
+        [ -e feeds.conf.default ] && mv feeds.conf.default openwrt/feeds.conf.default
+        chmod +x scripts/diy-part1.sh scripts/diy-part2.sh scripts/custom/*.sh
         cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P1_SH
+        $GITHUB_WORKSPACE/scripts/diy-part1.sh
 
     - name: 更新feeds
       run: cd openwrt && ./scripts/feeds update -a
@@ -91,9 +120,8 @@ jobs:
       run: |
         cd openwrt
         # passwall feed 里的 Xray-core 26.x 的 go.mod 要求 go >= 1.27，
-        # 而 immortalwrt openwrt-24.10 自带的 golang 只有 1.23.12，编译必然失败（Error 255）。
-        # 这里删掉 passwall 的重复定义，改用 immortalwrt 官方 packages 中的
-        # net/xray-core（25.2.21，go 1.23），与当前 golang 版本匹配。
+        # 而 openwrt-24.10 自带的 golang 只有 1.23.x，编译必然失败（Error 255）。
+        # 删掉 passwall 的重复定义，改用 immortalwrt 官方 packages 的 net/xray-core。
         rm -rf feeds/passwall_packages/xray-core
         echo "最终采用的 xray-core 来源："
         grep -E '^PKG_NAME|^PKG_VERSION' feeds/packages/net/xray-core/Makefile
@@ -101,38 +129,49 @@ jobs:
     - name: 安装feeds
       run: cd openwrt && ./scripts/feeds install -a
 
-    - name: 加载自定义配置
+    - name: 应用定制（插件清单 / 主题 / 机型 / 第三方插件）
       run: |
-        [ -e files ] && mv files openwrt/files
-        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
-        chmod +x $DIY_P2_SH
+        cp -f .config openwrt/.config
         cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P2_SH
+        # 基础默认配置：默认 IP / 密码 / 主机名 / 时区 / WLAN / SSL 后端修复
+        $GITHUB_WORKSPACE/scripts/diy-part2.sh
+        # 万能定制：packages.seed + devices.* + 第三方插件（幂等、带兼容性过滤）
+        $GITHUB_WORKSPACE/scripts/custom/customize.sh "$GITHUB_WORKSPACE/custom"
 
     - name: 生成配置并校验
       run: |
         cd openwrt
-        # 先记录我们要求的包，defconfig 后比对，找出被 kconfig 静默丢弃的项
         grep -E '^CONFIG_PACKAGE_[^=]+=y$' .config | sort > /tmp/requested.txt
-        echo "要求编译进固件的包数量: $(wc -l < /tmp/requested.txt)"
+        echo "请求编译进固件的包数量: $(wc -l < /tmp/requested.txt)"
 
         make defconfig
 
+        # ZeroTier 回退：若换成新版包后 zerotier 反而被 defconfig 丢弃，自动恢复 feeds 版
+        if [ -f "$GITHUB_WORKSPACE/ci-out/zerotier-fallback.env" ] && ! grep -q '^CONFIG_PACKAGE_zerotier=y' .config; then
+          echo "::warning::mwarning 版 zerotier 在 defconfig 中被丢弃，回退 feeds 自带版本"
+          set +e; . "$GITHUB_WORKSPACE/ci-out/zerotier-fallback.env"; set -e
+          rm -rf package/zerotier
+          if [ -n "${ZEROTIER_BACKUP:-}" ] && [ -d "${ZEROTIER_BACKUP}" ]; then
+            cp -a "${ZEROTIER_BACKUP}" feeds/packages/net/zerotier
+            ./scripts/feeds install zerotier >/dev/null 2>&1 || true
+            rm -rf tmp/.packageinfo tmp/.packageauxvars
+            make defconfig
+          fi
+        fi
+
         echo "===== 代理核心 ====="
         grep -E '^CONFIG_PACKAGE_(xray-core|v2ray-core|v2ray-geoip|v2ray-geosite)=y' .config || true
-        grep -E '^# CONFIG_PACKAGE_(xray-core|v2ray-core) is not set' .config || true
-
+        echo "===== 第三方插件 ====="
+        grep -E '^CONFIG_PACKAGE_(kmod-tun|luci-theme-argon|zerotier|luci-app-zerotier|easytier-noweb|luci-app-easytier|ddns-go|luci-app-ddns-go|luci-app-store|luci-app-wechatpush)=' .config || true
         echo "===== SSL 后端（必须只有 1 个 libustream-ssl 变体）====="
-        grep -E '^(CONFIG_PACKAGE_libustream-(openssl|mbedtls|wolfssl)=y|# CONFIG_PACKAGE_libustream-(openssl|mbedtls|wolfssl) is not set)' .config || true
         cnt=$(grep -cE '^CONFIG_PACKAGE_libustream-(openssl|mbedtls|wolfssl)=y' .config || true)
         echo "libustream-ssl 变体数量: $cnt"
         if [ "$cnt" -ne 1 ]; then
-          echo "::error::libustream-ssl 变体数量必须为 1（当前 $cnt），否则 package/install 阶段会因 libustream-ssl.so 撞文件而失败"
+          echo "::error::libustream-ssl 变体数量必须为 1（当前 $cnt）"
           exit 1
         fi
 
-        # 找出被静默丢弃的请求项：写错包名(provides 虚拟名/大小写不符/已改名)时
-        # kconfig 不会报错，只会静默删掉，这里把差异打出来。
+        # 被 kconfig 静默丢弃的请求项（写错包名 / provides 虚拟名 / 包不存在）
         grep -E '^CONFIG_PACKAGE_[^=]+=y$' .config | sort > /tmp/resolved.txt
         comm -23 /tmp/requested.txt /tmp/resolved.txt > /tmp/dropped.txt || true
         if [ -s /tmp/dropped.txt ]; then
@@ -144,16 +183,13 @@ jobs:
 
         # 关键包硬校验：这些缺一个固件就不完整
         fail=0
-        for p in xray-core v2ray-geoip v2ray-geosite adguardhome luci-app-passwall luci-app-openclash; do
+        for p in xray-core v2ray-geoip v2ray-geosite adguardhome luci-app-passwall luci-app-openclash luci-theme-argon kmod-tun; do
           if ! grep -q "^CONFIG_PACKAGE_${p}=y" .config; then
             echo "::error::关键包未选中: ${p}"
             fail=1
           fi
         done
-        if grep -q '^CONFIG_PACKAGE_v2ray-core=y' .config; then
-          echo "::error::v2ray-core 不应被选中"
-          fail=1
-        fi
+        grep -q '^CONFIG_PACKAGE_v2ray-core=y' .config && { echo "::error::v2ray-core 不应被选中"; fail=1; }
         [ "$fail" -eq 0 ] || exit 1
         echo "关键包校验通过"
 
@@ -175,50 +211,54 @@ jobs:
     - name: 整理固件文件
       run: |
         cd openwrt
-        mkdir -p $GITHUB_WORKSPACE/firmware
-        cp -f bin/targets/*/*/*squashfs-sysupgrade.bin $GITHUB_WORKSPACE/firmware/CR6608-immortalwrt-squashfs-sysupgrade.bin
-        cp -f bin/targets/*/*/*initramfs-kernel.bin $GITHUB_WORKSPACE/firmware/CR6608-immortalwrt-initramfs-kernel.bin 2>/dev/null || true
-        cp -f bin/targets/*/*/*.manifest $GITHUB_WORKSPACE/firmware/ 2>/dev/null || true
-        cd $GITHUB_WORKSPACE/firmware
-        sha256sum * > sha256sums.txt
-        ls -lh
+        F=$GITHUB_WORKSPACE/firmware
+        mkdir -p "$F"
+        cp -f bin/targets/*/*/*squashfs-sysupgrade.bin "$F/${ARTIFACT_PREFIX}-immortalwrt-squashfs-sysupgrade.bin"
+        cp -f bin/targets/*/*/*initramfs-kernel.bin "$F/${ARTIFACT_PREFIX}-immortalwrt-initramfs-kernel.bin" 2>/dev/null || true
+        cp -f bin/targets/*/*/*.manifest "$F/" 2>/dev/null || true
+        cp -f $GITHUB_WORKSPACE/ci-out/*.plugins.md "$F/" 2>/dev/null || true
+        cp -f $GITHUB_WORKSPACE/ci-out/third-party-sources.txt "$F/" 2>/dev/null || true
+        cp -f $GITHUB_WORKSPACE/ci-out/source-commit.txt "$F/" 2>/dev/null || true
+        # 内核版本：从 kmod 包的 ABI 版本号里取（形如 6.6.157-r1）
+        grep -m1 -oE '^kmod-nf-conntrack - [0-9][^ ]*' bin/targets/*/*/*.manifest 2>/dev/null \
+          | head -n1 | awk '{print $3}' | cut -d- -f1 > "$F/kernel-version.txt" || echo unknown > "$F/kernel-version.txt"
+        cd "$F" && sha256sum * > sha256sums.txt && ls -lh
 
     - name: 校验产物
       run: |
         cd $GITHUB_WORKSPACE/firmware
-        test -f CR6608-immortalwrt-squashfs-sysupgrade.bin || { echo "未找到 sysupgrade 固件"; exit 1; }
+        test -f ${ARTIFACT_PREFIX}-immortalwrt-squashfs-sysupgrade.bin || { echo "未找到 sysupgrade 固件"; exit 1; }
         echo "产物校验通过"
 
     - name: 上传固件到Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: CR6608-OpenWrt
+        name: ${{ env.ARTIFACT_PREFIX }}-OpenWrt
         path: firmware/*
         retention-days: 7
 
-    - name: 上传固件到Release
-      uses: softprops/action-gh-release@v2
+    - name: 发布 Release（时间戳 tag + latest + 清理旧版本）
       if: env.UPLOAD_RELEASE == 'true' && success()
-      with:
-        tag_name: CR6608-${{ github.run_number }}
-        files: firmware/*
-        body: |
-          ## 小米CR6608 ImmortalWrt 固件
-          - 源码：ImmortalWrt 24.10（${{ env.REPO_BRANCH }}）
-          - 机型：小米CR6608（MT7621 + MT7915E AX1800）
-          - 代理核心：xray-core（已移除 v2ray-core）
-          - 预装：ZeroTier + PassWall + OpenClash + iStore 应用商店 + AdGuardHome + Argon 主题
-          - 默认 IP：192.168.1.1
-          - 默认密码：qq3429510
-          - 编译时间：${{ env.DATE }}
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        chmod +x scripts/custom/release.sh
+        export VERSION_KERNEL="$(cat firmware/kernel-version.txt 2>/dev/null || echo unknown)"
+        export SOURCE_BRANCH="${SOURCE_BRANCH_ACTUAL:-$SOURCE_BRANCH}"
+        scripts/custom/release.sh firmware "$RELEASE_PREFIX" "$KEEP_RECENT"
 
-    - name: 删除旧的Release
-      uses: dev-drprasad/delete-older-releases@v0.2.1
-      if: env.UPLOAD_RELEASE == 'true' && success()
-      with:
-        keep_latest: 3
-        delete_tags: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: 自动更新 README
+      if: success()
+      run: |
+        chmod +x scripts/custom/gen-readme.sh
+        scripts/custom/gen-readme.sh "$GITHUB_WORKSPACE"
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        if ! git diff --quiet -- README.md; then
+          git add README.md
+          git commit -m "docs: 自动更新 README [skip ci]"
+          git push
+          echo "README 已更新并提交"
+        else
+          echo "README 无变化"
+        fi

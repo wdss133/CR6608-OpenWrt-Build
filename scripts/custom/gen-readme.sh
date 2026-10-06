@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+#
+# gen-readme.sh —— 依据仓库「实际配置」重新生成 README.md
+#
+# 目的：让 README 永远与本仓库的真实配置一致（机型白名单、默认主题、新增插件、
+#       发布策略、自动化时间、迁移说明），不需要人工维护。
+#       上游怎么变、分支怎么换，只要改了 custom/ 里的配置，README 会自动跟上。
+#
+# 用法：gen-readme.sh [repo_root]
+# 环境变量（可选，用于文案）：RELEASE_PREFIX / KEEP_RECENT / SOURCE_REPO / SOURCE_BRANCH / CUSTOM_DIR / WORKFLOW_FILE
+#
+set -Eeuo pipefail
+
+ROOT="${1:-${GITHUB_WORKSPACE:-$PWD}}"
+cd "$ROOT"
+
+CUSTOM_DIR="${CUSTOM_DIR:-custom}"
+SEED="$CUSTOM_DIR/packages.seed"
+INC="$CUSTOM_DIR/devices.include"
+EXC="$CUSTOM_DIR/devices.exclude"
+PREFIX="${RELEASE_PREFIX:-CR6608}"
+KEEP_RECENT="${KEEP_RECENT:-36}"
+SOURCE_REPO="${SOURCE_REPO:-https://github.com/immortalwrt/immortalwrt.git}"
+SOURCE_BRANCH="${SOURCE_BRANCH:-openwrt-24.10}"
+WORKFLOW_FILE="${WORKFLOW_FILE:-.github/workflows/build.yml}"
+
+strip_list() { grep -vE '^[[:space:]]*(#|$)' "$1" 2>/dev/null | tr -d '\r' || true; }
+
+devices_block() {
+  if [ -f "$INC" ]; then
+    strip_list "$INC" | sed 's/^/- /'
+  else
+    echo "- (未配置 devices.include)"
+  fi
+  if [ -f "$EXC" ] && grep -qvE '^[[:space:]]*(#|$)' "$EXC"; then
+    local ex
+    ex="$(strip_list "$EXC" | awk 'NR==1{printf "%s",$0; next} {printf "、%s",$0}')"
+    [ -n "$ex" ] && echo "- 另排除：$ex"
+  fi
+}
+
+added_block() {
+  if [ -f "$SEED" ]; then
+    grep -E '^CONFIG_PACKAGE_[^=]+=y' "$SEED" 2>/dev/null | sed -E 's/^CONFIG_PACKAGE_//; s/=y$//' | sed 's/^/- /' || true
+  fi
+}
+
+OUT="$(mktemp)"
+{
+  cat <<EOF
+# 小米 CR6608 固件自动编译
+
+> 本仓库自动同步上游 ImmortalWrt 源码并编译 **小米 CR6608** 固件。
+> 所有定制全部收敛在 **自有文件**（\`custom/\` + \`scripts/custom/\`）里，
+> 以「新增文件 + 幂等脚本」实现，上游同步不产生冲突；换分支 / 重新 fork 后照旧可用。
+
+## ✅ 本仓库的实际配置
+
+### 1) 编译机型
+只编译下列机型（其余全部关闭，缩短编译时间）：
+
+$(devices_block)
+
+### 2) 默认主题
+- 默认主题为 **argon**（\`luci-theme-argon\` + \`luci-app-argon-config\`），并通过
+  \`uci-defaults\` 兜底确保首次开机即生效；
+- 已确保 **aurora 主题**（\`luci-theme-aurora\` / \`luci-app-aurora-config\`）不存在。
+
+### 3) 内置插件
+（来源：\`${CUSTOM_DIR}/packages.seed\`，增删包只改这一个文件）
+
+$(added_block)
+
+其中第三方插件在编译时**从各自上游仓库拉取最新版**，并在发布说明中记录
+**版本号与上游更新日期**（见下方「发布策略」）。
+
+### 4) 发布策略（全自动）
+每次编译后：
+
+- 创建一个**时间戳 tag** 的 Release：\`${PREFIX}-YYYYMMDD-HHMM\`（北京时间）；
+- 更新滚动 Release \`${PREFIX}-latest\` —— **下载链接固定**，永远指向最新固件；
+- 自动清理，保留规则（取并集）：
+  \`latest\` + 最近 **${KEEP_RECENT}** 个时间戳版本 + **每月最后一次编译**（月度归档）+ 当天全部编译。
+- 只清理时间戳格式的 \`${PREFIX}-YYYYMMDD-HHMM\`；其它 tag（含历史运行编号版本如 \`${PREFIX}-2\`）一律不动，避免误删已有可用固件。
+
+### 5) 自动化
+- 每天**北京时间 21:00**（UTC 13:00）自动同步上游源码并编译（\`${WORKFLOW_FILE}\`）；
+- 也可在 Actions 页手动 \`Run workflow\`（可选是否发布 Release）；
+- 每次编译后自动重新生成这份 README 并提交回仓库。
+- 想换上游源码：改 \`${WORKFLOW_FILE}\` 里的 \`SOURCE_REPO\` / \`SOURCE_BRANCH\` 即可，脚本会自动探测可用分支。
+
+上游源码：${SOURCE_REPO}（分支 ${SOURCE_BRANCH}）。
+
+## 🚀 刷机
+
+从 \`${PREFIX}-latest\` 下载：
+
+- \`${PREFIX}-immortalwrt-squashfs-sysupgrade.bin\` —— 已刷过 OpenWrt 时升级用
+  （LuCI「系统 → 备份/刷写固件」，首刷建议不保留配置）；
+- \`${PREFIX}-immortalwrt-initramfs-kernel.bin\` —— 救砖 / 首次刷入中转用；
+- \`sha256sums.txt\` —— 校验值（\`sha256sum -c sha256sums.txt\`）。
+
+默认地址 **192.168.1.1**，默认密码 **qq3429510**。
+
+## 🔁 换分支 / 重新 fork 后继续使用
+
+定制全部在自有文件里，迁移时带上这些文件即可：
+
+| 文件 | 作用 |
+|---|---|
+| \`${WORKFLOW_FILE}\` | 同步上游 + 编译 + 发布流水线 |
+| \`scripts/custom/customize.sh\` | 应用全部定制（插件清单 / 主题 / 机型筛选 / 第三方插件拉取与版本表） |
+| \`scripts/custom/release.sh\` | 时间戳 tag 发布 + \`latest\` + 保留策略清理 |
+| \`scripts/custom/gen-readme.sh\` | 生成本 README |
+| \`${CUSTOM_DIR}/packages.seed\` | 新增 / 启用插件清单（改包只改这里） |
+| \`${CUSTOM_DIR}/devices.include\`、\`devices.exclude\` | 机型白名单 / 黑名单 |
+| \`.config\` | 基础配置（目标平台、基础包、PassWall 等） |
+| \`scripts/diy-part1.sh\`、\`scripts/diy-part2.sh\` | 第三方 feeds / 默认 IP、密码、主机名、WLAN、SSL 后端修复 |
+
+---
+_本 README 由 \`scripts/custom/gen-readme.sh\` 自动生成；要改内容请改脚本或 \`${CUSTOM_DIR}/\` 配置，勿手工大改。_
+EOF
+} > "$OUT"
+
+cp "$OUT" README.md
+rm -f "$OUT"
+printf '[readme] 已生成 README.md\n'
