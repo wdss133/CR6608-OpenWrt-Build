@@ -6,27 +6,34 @@
 #   1) 依据固件清单与构建阶段产物生成发布说明（含第三方插件拉取到的版本号与上游更新日期）；
 #   2) 每次编译创建一个「时间戳 tag」Release：<PREFIX>-YYYYMMDD-HHMM（北京时间）；
 #   3) 同时维护滚动 Release <PREFIX>-latest，下载链接固定，永远指向最新固件；
-#   4) 清理旧 Release，保留规则（取并集，全部保住）：
-#        - 滚动 <PREFIX>-latest
-#        - 最近 KEEP_RECENT 个时间戳 Release（默认 36）
-#        - 每个月的最后一次编译（月度归档）
+#   4) 清理旧 Release。命名规则只有一种：<PREFIX>-YYYYMMDD-HHMM（北京时间）。
+#      任何不符合该格式的 <PREFIX>-* Release（旧的运行编号式命名）一律删除。
+#      保留规则（取并集，全部保住）：
+#        - 滚动 <PREFIX>-latest（每次编译覆盖，下载链接固定）
+#        - 最近 KEEP_RECENT 个时间戳 Release（默认 36，约等于最近 36 天的每日编译）
+#        - 每个月的最后一次编译（月度归档），保留最近 KEEP_MONTHS 个月（默认 36 个月 = 3 年）
 #        - 当天的全部编译
 #      只删除以 <PREFIX>- 开头的 Release，绝不动其它 tag。
 #
 # 用法：
-#   release.sh <artifact_dir> [tag_prefix] [keep_recent]
+#   release.sh <artifact_dir> [tag_prefix] [keep_recent] [keep_months]
 # 环境变量：
 #   GH_TOKEN            必填（contents:write），gh CLI 使用
 #   GITHUB_REPOSITORY   必填（owner/repo）；本地调试可用 REPO 覆盖
 #   TAG_TZ              可选，tag 使用哪个时区的时间戳，默认 Asia/Shanghai
+#   KEEP_RECENT         可选，保留最近几次编译，默认 36
+#   KEEP_MONTHS         可选，月度归档保留几个月，默认 36（=3 年）
+#   PRUNE_LEGACY        可选，是否清理非时间戳命名的旧 Release，默认 1（清理）
 #   VERSION_KERNEL      可选，写入发布说明
 #   SOURCE_REPO/SOURCE_BRANCH 可选，写入发布说明
 #
 set -Eeuo pipefail
 
-ART_DIR="${1:?用法: release.sh <artifact_dir> [tag_prefix] [keep_recent]}"
+ART_DIR="${1:?用法: release.sh <artifact_dir> [tag_prefix] [keep_recent] [keep_months]}"
 PREFIX="${2:-CR6608}"
 KEEP_RECENT="${3:-${KEEP_RECENT:-36}}"
+KEEP_MONTHS="${4:-${KEEP_MONTHS:-36}}"
+PRUNE_LEGACY="${PRUNE_LEGACY:-1}"
 REPO="${REPO:-${GITHUB_REPOSITORY:-}}"
 TAG_TZ="${TAG_TZ:-Asia/Shanghai}"
 VERSION_KERNEL="${VERSION_KERNEL:-unknown}"
@@ -46,6 +53,8 @@ TODAY="$(TZ="$TAG_TZ" date '+%Y%m%d')"
 NOW="$(TZ="$TAG_TZ" date '+%Y-%m-%d %H:%M')（北京时间）"
 TS_TAG="${PREFIX}-${STAMP}"
 LATEST_TAG="${PREFIX}-latest"
+# 月度归档的时间下界：保留最近 KEEP_MONTHS 个月（含当月）
+CUTOFF_MONTH="$(TZ="$TAG_TZ" date -d "-$((KEEP_MONTHS - 1)) months" '+%Y%m')"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -109,9 +118,14 @@ BODY="$WORK/body.md"
     echo ""
   fi
   echo "### 🗂 Release 保留策略"
-  echo "- 每次编译生成一个时间戳 tag：\`${PREFIX}-YYYYMMDD-HHMM\`"
-  echo "- 同时更新滚动 \`${LATEST_TAG}\`"
-  echo "- 自动清理：保留 \`latest\` + 最近 **${KEEP_RECENT}** 个时间戳版本 + 每月最后一次编译 + 当天全部"
+  echo "- 命名规则只有一种：\`${PREFIX}-YYYYMMDD-HHMM\`（北京时间），不再使用运行编号式命名"
+  echo "- 每次编译生成一个时间戳 tag，同时更新滚动 \`${LATEST_TAG}\`（链接固定，永远指向最新固件）"
+  echo "- 自动清理保留（取并集）："
+  echo "  1. 滚动 \`${LATEST_TAG}\`"
+  echo "  2. 最近 **${KEEP_RECENT}** 次编译"
+  echo "  3. 每月最后一次编译，保留最近 **${KEEP_MONTHS}** 个月（≈3 年，月度归档）"
+  echo "  4. 当天的全部编译"
+  echo "- 不符合时间戳格式的历史 Release 会被自动清理"
 } > "$BODY"
 log "发布说明已生成: $BODY"
 
@@ -151,10 +165,12 @@ for t in "${TS_TAGS[@]:-}"; do
 done
 
 # 每个月的最后一次编译（TS_TAGS 已按时间倒序，每个 YYYYMM 的首次出现即该月最后一次）
+# 只保留时间下界 CUTOFF_MONTH 之后的月份，即最近 KEEP_MONTHS 个月（默认 36 个月 = 3 年）
 declare -A MONTH_SEEN=()
 for t in "${TS_TAGS[@]:-}"; do
   [ -n "$t" ] || continue
   d="${t#${PREFIX}-}"; m="${d:0:6}"
+  [[ "$m" < "$CUTOFF_MONTH" ]] && continue
   if [ -z "${MONTH_SEEN[$m]:-}" ]; then
     KEEP["$t"]=1
     MONTH_SEEN[$m]=1
@@ -168,10 +184,9 @@ for t in "${TS_TAGS[@]:-}"; do
   case "$d" in "${TODAY}-"*) KEEP["$t"]=1 ;; esac
 done
 
-log "时间戳版本共 ${#TS_TAGS[@]} 个，月度归档 ${#MONTH_SEEN[@]} 个月，保留 ${#KEEP[@]} 个 Release"
+log "时间戳版本共 ${#TS_TAGS[@]} 个，月度归档 ${#MONTH_SEEN[@]} 个月（下界 ${CUTOFF_MONTH}），保留 ${#KEEP[@]} 个 Release"
 
-# 只清理「时间戳格式」的本前缀 Release：<PREFIX>-YYYYMMDD-HHMM
-# 旧格式（如运行编号 CR6608-2）与其它 tag 一律不动，避免误删已有可用固件
+# 清理超出保留集合的「时间戳格式」Release：<PREFIX>-YYYYMMDD-HHMM
 for t in "${TS_TAGS[@]:-}"; do
   [ -n "$t" ] || continue
   [ -n "${KEEP[$t]:-}" ] && continue
@@ -179,10 +194,21 @@ for t in "${TS_TAGS[@]:-}"; do
   gh release delete "$t" --repo "$REPO" --yes --cleanup-tag || true
 done
 
-legacy="$(gh release list --repo "$REPO" --limit 500 --json tagName --jq '.[].tagName' \
-  | grep -E "^${PREFIX}(-|$)" | grep -vE "^${PREFIX}-[0-9]{8}-[0-9]{4}$" | grep -vx "$LATEST_TAG" || true)"
-if [ -n "$legacy" ]; then
-  log "以下非时间戳格式的旧 Release 已保留（如需删除请手动处理）：$(printf '%s' "$legacy" | tr '\n' ' ')"
+# 清理「非时间戳格式」的历史 Release（如旧的运行编号命名 CR6608-2 / CR6608-4 / CR6608-142）
+# 命名规则已统一为 <PREFIX>-YYYYMMDD-HHMM，旧命名一律不再保留
+if [ "$PRUNE_LEGACY" = "1" ]; then
+  mapfile -t LEGACY < <(
+    gh release list --repo "$REPO" --limit 500 --json tagName --jq '.[].tagName' \
+    | grep -E "^${PREFIX}(-|$)" | grep -vE "^${PREFIX}-[0-9]{8}-[0-9]{4}$" | grep -vx "$LATEST_TAG" || true
+  )
+  for t in "${LEGACY[@]:-}"; do
+    [ -n "$t" ] || continue
+    log "删除非时间戳命名的旧 Release: $t"
+    gh release delete "$t" --repo "$REPO" --yes --cleanup-tag || true
+  done
+  [ "${#LEGACY[@]}" -gt 0 ] && log "已清理 ${#LEGACY[@]} 个非时间戳命名的旧 Release"
+else
+  log "PRUNE_LEGACY=0，跳过非时间戳命名旧 Release 的清理"
 fi
 
 log "完成：本次时间戳 tag = ${TS_TAG}"

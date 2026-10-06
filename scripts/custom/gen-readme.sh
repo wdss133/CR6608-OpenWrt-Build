@@ -20,6 +20,7 @@ INC="$CUSTOM_DIR/devices.include"
 EXC="$CUSTOM_DIR/devices.exclude"
 PREFIX="${RELEASE_PREFIX:-CR6608}"
 KEEP_RECENT="${KEEP_RECENT:-36}"
+KEEP_MONTHS="${KEEP_MONTHS:-36}"
 SOURCE_REPO="${SOURCE_REPO:-https://github.com/immortalwrt/immortalwrt.git}"
 SOURCE_BRANCH="${SOURCE_BRANCH:-openwrt-24.10}"
 WORKFLOW_FILE="${WORKFLOW_FILE:-.github/workflows/build.yml}"
@@ -79,9 +80,13 @@ $(added_block)
 
 - 创建一个**时间戳 tag** 的 Release：\`${PREFIX}-YYYYMMDD-HHMM\`（北京时间）；
 - 更新滚动 Release \`${PREFIX}-latest\` —— **下载链接固定**，永远指向最新固件；
+- 命名规则只有一种：\`${PREFIX}-YYYYMMDD-HHMM\`（北京时间），不再使用运行编号式命名；
 - 自动清理，保留规则（取并集）：
-  \`latest\` + 最近 **${KEEP_RECENT}** 个时间戳版本 + **每月最后一次编译**（月度归档）+ 当天全部编译。
-- 只清理时间戳格式的 \`${PREFIX}-YYYYMMDD-HHMM\`；其它 tag（含历史运行编号版本如 \`${PREFIX}-2\`）一律不动，避免误删已有可用固件。
+  1. 滚动 \`${PREFIX}-latest\`
+  2. 最近 **${KEEP_RECENT}** 次编译（每天一份，约等于最近 ${KEEP_RECENT} 天）
+  3. **每月最后一次编译**（月度归档），保留最近 **${KEEP_MONTHS}** 个月 ≈ **3 年**
+  4. 当天的全部编译
+- 凡是不符合 \`${PREFIX}-YYYYMMDD-HHMM\` 格式的历史 Release（旧的运行编号式命名，如 \`${PREFIX}-2\`）会被自动清理，列表里只会剩一种命名。
 
 ### 5) 自动化
 - 每天**北京时间 21:00**（UTC 13:00）自动同步上游源码并编译（\`${WORKFLOW_FILE}\`）；

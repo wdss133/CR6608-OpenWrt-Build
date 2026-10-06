@@ -34,7 +34,11 @@ env:
   DEVICE: xiaomi_mi-router-cr6608
   ARTIFACT_PREFIX: CR6608
   RELEASE_PREFIX: CR6608
+  # 保留策略：最近 36 次编译 + 最近 36 个月（≈3 年）的月度归档 + 当天全部 + 滚动 latest
   KEEP_RECENT: 36
+  KEEP_MONTHS: 36
+  # 是否清理非时间戳命名（旧的运行编号式 CR6608-1 / CR6608-2）的历史 Release，1=清理
+  PRUNE_LEGACY: 1
   # ===== 定制开关（详见 custom/packages.seed）=====
   EASYTIER_VARIANT: noweb
   ZEROTIER_SOURCE: mwarning
@@ -248,7 +252,7 @@ jobs:
         chmod +x scripts/custom/release.sh
         export VERSION_KERNEL="$(cat firmware/kernel-version.txt 2>/dev/null || echo unknown)"
         export SOURCE_BRANCH="${SOURCE_BRANCH_ACTUAL:-$SOURCE_BRANCH}"
-        scripts/custom/release.sh firmware "$RELEASE_PREFIX" "$KEEP_RECENT"
+        scripts/custom/release.sh firmware "$RELEASE_PREFIX" "$KEEP_RECENT" "$KEEP_MONTHS"
 
     - name: 自动更新 README
       if: success()
