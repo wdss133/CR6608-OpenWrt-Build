@@ -112,10 +112,16 @@ jobs:
     - name: 生成配置并校验
       run: |
         cd openwrt
+        # 先记录我们要求的包，defconfig 后比对，找出被 kconfig 静默丢弃的项
+        grep -E '^CONFIG_PACKAGE_[^=]+=y$' .config | sort > /tmp/requested.txt
+        echo "要求编译进固件的包数量: $(wc -l < /tmp/requested.txt)"
+
         make defconfig
+
         echo "===== 代理核心 ====="
-        grep -E '^CONFIG_PACKAGE_(xray-core|v2ray-core|v2ray-geodata)=y' .config || true
+        grep -E '^CONFIG_PACKAGE_(xray-core|v2ray-core|v2ray-geoip|v2ray-geosite)=y' .config || true
         grep -E '^# CONFIG_PACKAGE_(xray-core|v2ray-core) is not set' .config || true
+
         echo "===== SSL 后端（必须只有 1 个 libustream-ssl 变体）====="
         grep -E '^(CONFIG_PACKAGE_libustream-(openssl|mbedtls|wolfssl)=y|# CONFIG_PACKAGE_libustream-(openssl|mbedtls|wolfssl) is not set)' .config || true
         cnt=$(grep -cE '^CONFIG_PACKAGE_libustream-(openssl|mbedtls|wolfssl)=y' .config || true)
@@ -124,6 +130,32 @@ jobs:
           echo "::error::libustream-ssl 变体数量必须为 1（当前 $cnt），否则 package/install 阶段会因 libustream-ssl.so 撞文件而失败"
           exit 1
         fi
+
+        # 找出被静默丢弃的请求项：写错包名(provides 虚拟名/大小写不符/已改名)时
+        # kconfig 不会报错，只会静默删掉，这里把差异打出来。
+        grep -E '^CONFIG_PACKAGE_[^=]+=y$' .config | sort > /tmp/resolved.txt
+        comm -23 /tmp/requested.txt /tmp/resolved.txt > /tmp/dropped.txt || true
+        if [ -s /tmp/dropped.txt ]; then
+          echo "::warning::以下包在 make defconfig 后被丢弃（多为 PROVIDES 虚拟名或包不存在，请核对真实包名）"
+          cat /tmp/dropped.txt
+        else
+          echo "所有请求的包都保留下来了"
+        fi
+
+        # 关键包硬校验：这些缺一个固件就不完整
+        fail=0
+        for p in xray-core v2ray-geoip v2ray-geosite adguardhome luci-app-passwall luci-app-openclash; do
+          if ! grep -q "^CONFIG_PACKAGE_${p}=y" .config; then
+            echo "::error::关键包未选中: ${p}"
+            fail=1
+          fi
+        done
+        if grep -q '^CONFIG_PACKAGE_v2ray-core=y' .config; then
+          echo "::error::v2ray-core 不应被选中"
+          fail=1
+        fi
+        [ "$fail" -eq 0 ] || exit 1
+        echo "关键包校验通过"
 
     - name: 下载DL库
       run: |

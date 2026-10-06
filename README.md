@@ -25,6 +25,33 @@
 实际编译的是 **immortalwrt 官方 packages 源中的 `net/xray-core`（25.2.21，go 1.23）**，
 与当前 golang 版本匹配，可正常编译通过。
 
+## 关于「包名写错会被静默丢弃」（重要）
+OpenWrt 的 `.config` 里如果写了**不存在的配置符号**（例如把 `PROVIDES` 虚拟名当成包名、
+大小写不符、包在该分支已改名/移除），`make defconfig` **不会报错**，只会把这一行
+悄悄删掉，最后固件里就没有这个包，很难察觉。
+
+本仓库已修正以下这类问题（都是之前被静默丢弃的）：
+
+| 原写法（无效） | 正确写法 | 说明 |
+| --- | --- | --- |
+| `v2ray-geodata` | `v2ray-geoip` + `v2ray-geosite` | `v2ray-geodata` 只是 PROVIDES 虚拟名；geoip/geosite 数据是 PassWall + xray 路由规则必需的 |
+| `AdGuardHome` | `adguardhome` | 真实包名是小写 |
+| `luci-app-adguardhome` | （无，已移除） | 该应用只存在于 luci 的 master 分支，`openwrt-24.10` 分支没有 |
+| `wget` | `wget-ssl` | `wget` 是 PROVIDES 虚拟名 |
+| `tc` | `tc-full` | `tc` 是 PROVIDES 虚拟名 |
+| `iptables` / `ip6tables` | `iptables-nft` | 24.10 中前两者是虚拟名，真实包为 `iptables-nft` |
+| `miniupnpd` | `miniupnpd-nftables` | 真实包带 nftables 后缀 |
+| `nftables` / `fw4` | `nftables-json` / `firewall4` | 前者是 PROVIDES 虚拟名 |
+| `shadowsocks-libev-ss-local/redir` | `shadowsocks-rust-sslocal` | libev 版在 24.10 feeds 里已无对应包 |
+| `pdnsd-alt` / `dynamic-dns-luci` / `luci-lib-tools` / `kmod-flow-offload` / `luci-i18n-opkg-zh-cn` | （已移除） | 24.10 已无同名包 |
+
+workflow 的「生成配置并校验」步骤会对比 `make defconfig` 前后的差异，
+把被丢弃的包列出来（warning），并对关键包（xray-core、v2ray-geoip/geosite、
+adguardhome、passwall、openclash）做硬校验，缺失即失败。
+
+> AdGuard Home 没有 LuCI 界面（24.10 分支无 `luci-app-adguardhome`），
+> 刷机后用其自带 Web 面板管理即可：`http://192.168.1.1:3000`。
+
 ## 关于 SSL 后端（libustream-ssl）的说明
 `libustream-ssl` 的三个变体 `openssl` / `mbedtls` / `wolfssl` 都会安装同一个文件
 `/lib/libustream-ssl.so`，Makefile 中已声明 `CONFLICTS`，**同一固件里只能存在一个**。
