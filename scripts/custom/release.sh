@@ -88,7 +88,22 @@ BODY="$WORK/body.md"
   echo "- 内核版本：**${VERSION_KERNEL}**"
   echo "- 编译时间：${NOW}"
   echo ""
-  echo "### 🧩 内置插件（编译时从上游拉取的版本）"
+  echo "### 🚨 刷机文件别选错"
+  echo ""
+  if [ -f "$ART_DIR/FLASHING.md" ]; then
+    cat "$ART_DIR/FLASHING.md"
+  else
+    echo "- PB-Boot 首次/恢复：先刷轻量 initramfs，启动后再刷完整 sysupgrade，**不保留配置**。"
+    echo "- 已运行 OpenWrt/ImmortalWrt：只刷 sysupgrade；跨大版本同样不保留配置。"
+  fi
+  echo ""
+  echo "### ✅ 静态验收"
+  echo "- 已检查 CR6608 设备元数据、legacy uImage 头/数据 CRC、squashfs 格式与内核 4MiB 上限。"
+  echo "- initramfs 是独立轻量救援系统，**不是全功能正式固件**；上限 24MiB。"
+  echo "- 详见随附 \`image-validation.json\`、\`config.buildinfo\` 和 \`FLASHING.md\`。"
+  echo "- **静态验收不等于实机启动保证**；本版本仍需上机验证。"
+  echo ""
+  echo "### 🧩 正式系统内置插件（编译时从上游拉取的版本）"
   echo ""
   if [ -n "$PLUGINS_MD" ]; then
     cat "$PLUGINS_MD"

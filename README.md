@@ -80,10 +80,13 @@
 
 从 `CR6608-latest` 下载：
 
-- `CR6608-immortalwrt-squashfs-sysupgrade.bin` —— 已刷过 OpenWrt 时升级用
-  （LuCI「系统 → 备份/刷写固件」，首刷建议不保留配置）；
-- `CR6608-immortalwrt-initramfs-kernel.bin` —— 救砖 / 首次刷入中转用；
+- `CR6608-immortalwrt-squashfs-sysupgrade.bin` —— **完整正式系统**，用于 OpenWrt/ImmortalWrt 内升级，或由 initramfs 写入 NAND；跨版本/从旧版升级**不保留配置**；
+- `CR6608-immortalwrt-initramfs-kernel.bin` —— **独立轻量救援系统**，用于 PB-Boot 首次/恢复启动，启动后再刷 sysupgrade；无线关闭，root 无密码；
+- `CR6608-immortalwrt-squashfs-firmware.bin` —— 原厂 SSH/mtd 或明确支持 NAND firmware 格式的恢复环境使用，**不要在 PB-Boot 网页把它当 initramfs 上传**；
+- `FLASHING.md`、`image-validation.json`、`config.buildinfo` —— 刷机说明、静态验收报告、完整构建配置；
 - `sha256sums.txt` —— 校验值（`sha256sum -c sha256sums.txt`）。
+
+**镜像结构验收不等于实机启动保证。** 不修改 Bootloader、DTS 或分区表；正式系统与救援盘分两次独立生成，避免把全部插件装进 RAM。
 
 默认地址 **192.168.1.1**，默认密码 **qq3429510**。
 

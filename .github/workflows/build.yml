@@ -199,43 +199,87 @@ jobs:
         [ "$fail" -eq 0 ] || exit 1
         echo "关键包校验通过"
 
-    - name: 下载DL库
+    - name: 下载DL库（完整系统）
       run: |
         cd openwrt
+        cp .config "$GITHUB_WORKSPACE/ci-out/full-expanded.config"
         make download -j8 || make download -j1 V=s
         find dl -size -1024c -exec ls -l {} \;
 
-    - name: 编译固件
+    - name: 编译完整正式系统
       id: compile
       run: |
         cd openwrt
-        echo -e "$(nproc) thread compile"
+        echo "$(nproc) thread compile"
         make -j$(nproc) || make -j1 V=s
-        echo "=================== 编译完成 ==================="
-        ls -la bin/targets/*/*
+        test -f "bin/targets/ramips/mt7621/immortalwrt-ramips-mt7621-${DEVICE}-squashfs-sysupgrade.bin"
+        ls -lh bin/targets/ramips/mt7621/
 
-    - name: 整理固件文件
+    - name: 收集完整正式系统
       run: |
         cd openwrt
         F=$GITHUB_WORKSPACE/firmware
         mkdir -p "$F"
-        cp -f bin/targets/*/*/*squashfs-sysupgrade.bin "$F/${ARTIFACT_PREFIX}-immortalwrt-squashfs-sysupgrade.bin"
-        cp -f bin/targets/*/*/*initramfs-kernel.bin "$F/${ARTIFACT_PREFIX}-immortalwrt-initramfs-kernel.bin" 2>/dev/null || true
-        cp -f bin/targets/*/*/*.manifest "$F/" 2>/dev/null || true
+        cp -f "bin/targets/ramips/mt7621/immortalwrt-ramips-mt7621-${DEVICE}-squashfs-sysupgrade.bin" \
+          "$F/${ARTIFACT_PREFIX}-immortalwrt-squashfs-sysupgrade.bin"
+        cp -f "bin/targets/ramips/mt7621/immortalwrt-ramips-mt7621-${DEVICE}-squashfs-firmware.bin" \
+          "$F/${ARTIFACT_PREFIX}-immortalwrt-squashfs-firmware.bin"
+        cp -f "bin/targets/ramips/mt7621/immortalwrt-ramips-mt7621-${DEVICE}.manifest" "$F/"
+        cp -f bin/targets/ramips/mt7621/config.buildinfo "$F/" 2>/dev/null || cp .config "$F/config.buildinfo"
+        cp -f bin/targets/ramips/mt7621/feeds.buildinfo "$F/" 2>/dev/null || true
+        cp -f bin/targets/ramips/mt7621/profiles.json "$F/" 2>/dev/null || true
+        cp -f "$GITHUB_WORKSPACE/ci-out/full-expanded.config" "$F/full-expanded.config"
+        cp -f "$GITHUB_WORKSPACE/.config" "$F/config.seed"
         cp -f $GITHUB_WORKSPACE/ci-out/*.plugins.md "$F/" 2>/dev/null || true
         cp -f $GITHUB_WORKSPACE/ci-out/third-party-sources.txt "$F/" 2>/dev/null || true
         cp -f $GITHUB_WORKSPACE/ci-out/version-pins.txt "$F/" 2>/dev/null || true
         cp -f $GITHUB_WORKSPACE/ci-out/source-commit.txt "$F/" 2>/dev/null || true
-        # 内核版本：从 kmod 包的 ABI 版本号里取（形如 6.6.157-r1）
-        grep -m1 -oE '^kmod-nf-conntrack - [0-9][^ ]*' bin/targets/*/*/*.manifest 2>/dev/null \
-          | head -n1 | awk '{print $3}' | cut -d- -f1 > "$F/kernel-version.txt" || echo unknown > "$F/kernel-version.txt"
-        cd "$F" && sha256sum * > sha256sums.txt && ls -lh
+        cp -f "$GITHUB_WORKSPACE/custom/FLASHING.md" "$F/"
+        grep -m1 -oE '^kmod-nf-conntrack - [0-9][^ ]*' "$F/immortalwrt-ramips-mt7621-${DEVICE}.manifest" \
+          | awk '{print $3}' | cut -d- -f1 > "$F/kernel-version.txt" || echo unknown > "$F/kernel-version.txt"
 
-    - name: 校验产物
+    - name: 单独生成轻量救援 initramfs
       run: |
-        cd $GITHUB_WORKSPACE/firmware
-        test -f ${ARTIFACT_PREFIX}-immortalwrt-squashfs-sysupgrade.bin || { echo "未找到 sysupgrade 固件"; exit 1; }
-        echo "产物校验通过"
+        cd openwrt
+        # 保留已编译的 ipk/toolchain/dl，只清理会携带完整包列表的根文件系统。
+        # 不 patch 上游 image.mk、不更换内核、不改分区或 DTS。
+        cp "$GITHUB_WORKSPACE/custom/initramfs.config" .config
+        $GITHUB_WORKSPACE/scripts/diy-part2.sh initramfs
+        make defconfig
+        grep -q '^CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-cr6608=y$' .config
+        grep -q '^CONFIG_TARGET_ROOTFS_INITRAMFS=y$' .config
+        ! grep -qE '^CONFIG_PACKAGE_(adguardhome|xray-core|luci-app-passwall|luci-app-openclash|zerotier|ddns-go|luci-app-store)=y$' .config
+        make package/clean
+        make -j$(nproc) || make -j1 V=s
+        F=$GITHUB_WORKSPACE/firmware
+        cp -f "bin/targets/ramips/mt7621/immortalwrt-ramips-mt7621-${DEVICE}-initramfs-kernel.bin" \
+          "$F/${ARTIFACT_PREFIX}-immortalwrt-initramfs-kernel.bin"
+        cp -f "bin/targets/ramips/mt7621/immortalwrt-ramips-mt7621-${DEVICE}.manifest" "$F/initramfs.manifest"
+        cp -f .config "$F/initramfs-expanded.config"
+        echo "===== 轻量救援盘包数量 ====="
+        wc -l "$F/initramfs.manifest"
+        echo "===== 救援盘禁止包含的正式服务 ====="
+        ! grep -E '^(adguardhome|xray-core|zerotier|ddns-go|luci-app-passwall|luci-app-openclash|luci-app-store) ' "$F/initramfs.manifest"
+
+    - name: 校验固件结构、设备 ID、CRC 和尺寸
+      run: |
+        cd "$GITHUB_WORKSPACE/firmware"
+        python3 "$GITHUB_WORKSPACE/scripts/custom/verify-images.py" "$PWD" --prefix "$ARTIFACT_PREFIX"
+        # 原始 sysupgrade 正式内核也必须小于独立的 4MiB kernel 分区。
+        python3 - "$PWD/${ARTIFACT_PREFIX}-immortalwrt-squashfs-firmware.bin" <<'PY'
+        import struct, sys, zlib
+        p = sys.argv[1]
+        b = open(p, 'rb').read(4 * 1024 * 1024)
+        assert b[:4] == b'\x27\x05\x19\x56', 'firmware.bin 没有 uImage 内核头'
+        h = struct.unpack('>7I4B', b[:32])
+        assert h[3] + 64 <= len(b), 'firmware.bin 内核长度超出 4MiB 分区'
+        assert zlib.crc32(b[:4] + b'\0' * 4 + b[8:64]) & 0xffffffff == h[1]
+        assert zlib.crc32(b[64:]) & 0xffffffff == h[6]
+        assert b'\x55\x42\x49\x23' in open(p, 'rb').read(6 * 1024 * 1024)[4 * 1024 * 1024:], 'firmware.bin 缺少 UBI'
+        print('firmware.bin: 4MiB 内核 + UBI 布局与 CRC 校验通过')
+        PY
+        sha256sum * > sha256sums.txt
+        ls -lh
 
     - name: 上传固件到Artifact
       uses: actions/upload-artifact@v4

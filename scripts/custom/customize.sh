@@ -101,16 +101,16 @@ safe_rm() {
   done
 }
 
-# 目标架构：CONFIG_TARGET_ARCH_PACKAGES="mipsel_24kc" -> mipsel
-target_arch() {
-  local v
-  v="$(grep -m1 -E '^CONFIG_TARGET_ARCH_PACKAGES=' "$MAIN_CONFIG" 2>/dev/null \
-       | sed -E 's/^[^=]*=//; s/"//g; s/^[[:space:]]+//')"
-  printf '%s\n' "${v%%_*}"
-}
-ARCH_NAME="$(target_arch)"
-[ -n "$ARCH_NAME" ] || ARCH_NAME=unknown
-log "目标架构: ${ARCH_NAME}（由 CONFIG_TARGET_ARCH_PACKAGES 推导）"
+# 手工 seed 在这里只有 ramips/mt7621/设备三行，架构要等 make defconfig 后才有。
+# 不再从尚不存在的 CONFIG_TARGET_ARCH_PACKAGES 猜架构：CR6608 固定为 mipsel_24kc。
+ARCH_NAME="mipsel"
+if grep -qE '^CONFIG_TARGET_ramips_mt7621=y$' "$MAIN_CONFIG"; then
+  ARCH_NAME="mipsel"
+else
+  warn "当前配置不是已验证的 ramips/mt7621，第三方预编译包将按 unknown 处理"
+  ARCH_NAME="unknown"
+fi
+log "目标架构: ${ARCH_NAME}（CR6608 = mipsel_24kc）"
 
 ############################ 通用兼容性工具库 ############################
 # 提供 Go 版本兼容守卫 ensure_go_compatible() 等，详见 lib-compat.sh 头部说明。
@@ -368,19 +368,8 @@ safe_rm "$SOURCE_TMP"
 
 ############################ 4. 默认主题切换为 argon ############################
 
-log "设置默认主题为 ${DEFAULT_THEME}"
-theme_switched=0
-while IFS= read -r cfg_file; do
-  [ -f "$cfg_file" ] || continue
-  if grep -q "mediaurlbase" "$cfg_file"; then
-    before="$(md5sum "$cfg_file" | awk '{print $1}')"
-    sed -i -E "s#(option[[:space:]]+mediaurlbase[[:space:]]+')[^']*(')#\1/luci-static/${DEFAULT_THEME}\2#g" "$cfg_file"
-    after="$(md5sum "$cfg_file" | awk '{print $1}')"
-    [ "$before" != "$after" ] && { log "  默认主题写入: $cfg_file"; theme_switched=1; }
-  fi
-done < <(grep -rl "mediaurlbase" feeds package 2>/dev/null || true)
-
-# 兜底：固件首次开机时强制写 uci，即便上面没定位到配置文件也能生效
+log "默认主题由 diy-part2.sh 的 uci-defaults 设置为 ${DEFAULT_THEME}"
+# 不再递归修改所有含 mediaurlbase 的上游文件，主题只在首次启动时写入。
 uci_dir="package/base-files/files/etc/uci-defaults"
 mkdir -p "$uci_dir"
 cat > "${uci_dir}/99_custom_default_theme" <<EOF
@@ -394,12 +383,11 @@ uci -q commit luci
 exit 0
 EOF
 chmod +x "${uci_dir}/99_custom_default_theme"
-log "  已注入 uci-defaults 兜底脚本"
+log "  已注入 uci-defaults 主题脚本"
 
 if [ ! -d "feeds/luci/themes/luci-theme-argon" ] && [ ! -d "package/luci-theme-argon" ]; then
   die "未找到 luci-theme-argon 源码，无法设置默认主题"
 fi
-[ "$theme_switched" -eq 1 ] || warn "未在 feeds 中定位到 mediaurlbase 配置文件，已依赖 uci-defaults 兜底"
 
 ############################ 5. 机型筛选（白名单优先，其次黑名单）############################
 
@@ -445,7 +433,9 @@ fi
 
 dev_selected="$(grep -cE '^CONFIG_TARGET_[A-Za-z0-9_]+_DEVICE_.*=y' "$MAIN_CONFIG" || true)"
 log "当前选中的机型数量: $dev_selected"
-[ "$dev_selected" -gt 0 ] || die "没有任何机型被选中，请检查 ${CUSTOM_DIR}/devices.include"
+[ "$dev_selected" -eq 1 ] || die "必须且只能选中一个机型，当前为 ${dev_selected}，请检查 devices.include"
+grep -q '^CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-cr6608=y$' "$MAIN_CONFIG" \
+  || die "未选中 CR6608；禁止用其他机型的镜像冒充 CR6608 固件"
 
 ############################ 6. 刷新索引并自检 ############################
 
