@@ -45,6 +45,11 @@ env:
   DEFAULT_THEME: argon
   TZ: Asia/Shanghai
 
+# 同一仓库只允许一个构建发布 latest；手动修复优先于排队中的旧定时任务。
+concurrency:
+  group: cr6608-build-release
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
 jobs:
   build:
     runs-on: ubuntu-22.04
