@@ -243,6 +243,13 @@ jobs:
         grep -m1 -oE '^kmod-nf-conntrack - [0-9][^ ]*' "$F/immortalwrt-ramips-mt7621-${DEVICE}.manifest" \
           | awk '{print $3}' | cut -d- -f1 > "$F/kernel-version.txt" || echo unknown > "$F/kernel-version.txt"
 
+    - name: 暂存完整系统（救援盘失败时仍可下载排查）
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.ARTIFACT_PREFIX }}-full-system
+        path: firmware/*
+        retention-days: 3
+
     - name: 单独生成轻量救援 initramfs
       run: |
         cd openwrt
@@ -254,7 +261,8 @@ jobs:
         grep -q '^CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-cr6608=y$' .config
         grep -q '^CONFIG_TARGET_ROOTFS_INITRAMFS=y$' .config
         ! grep -qE '^CONFIG_PACKAGE_(adguardhome|xray-core|luci-app-passwall|luci-app-openclash|zerotier|ddns-go|luci-app-store)=y$' .config
-        make package/clean
+        # 不执行 make package/clean：package/install 会重建 root-ramips，
+        # 只安装新配置选中的包；保留已编译产物能显著缩短救援盘构建时间。
         make -j$(nproc) || make -j1 V=s
         F=$GITHUB_WORKSPACE/firmware
         cp -f "bin/targets/ramips/mt7621/immortalwrt-ramips-mt7621-${DEVICE}-initramfs-kernel.bin" \
