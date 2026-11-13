@@ -1,0 +1,327 @@
+name: CR6608 每日自动编译
+
+on:
+  # 手动触发（Actions 页面 Run workflow）
+  workflow_dispatch:
+    inputs:
+      upload_release:
+        description: '发布 Release'
+        type: boolean
+        default: true
+  # 推送到 main 时自动编译（仅当配置 / 定制 / 脚本 / 工作流变化）
+  push:
+    branches:
+      - main
+    paths:
+      - '.config'
+      - 'custom/**'
+      - 'scripts/**'
+      - '.github/workflows/build.yml'
+  # 每天北京时间 21:00（UTC 13:00）自动同步上游源码并编译
+  schedule:
+    - cron: '0 13 * * *'
+
+permissions:
+  contents: write
+
+env:
+  # ===== 上游源码（想换成自己的 fork 就改这两行，例如 https://github.com/wdss133/immortalwrt.git）=====
+  SOURCE_REPO: https://github.com/immortalwrt/immortalwrt.git
+  SOURCE_BRANCH: openwrt-24.10
+  # 分支探测候选：上游改名/换默认分支时自动兜底，不会直接失败
+  SOURCE_FALLBACK_BRANCHES: master main openwrt-23.05
+  # ===== 设备与产物命名 =====
+  DEVICE: xiaomi_mi-router-cr6608
+  ARTIFACT_PREFIX: CR6608
+  RELEASE_PREFIX: CR6608
+  # 保留策略：最近 36 次编译 + 最近 36 个月（≈3 年）的月度归档 + 当天全部 + 滚动 latest
+  KEEP_RECENT: 36
+  KEEP_MONTHS: 36
+  # 是否清理非时间戳命名（旧的运行编号式 CR6608-1 / CR6608-2）的历史 Release，1=清理
+  PRUNE_LEGACY: 1
+  # ===== 定制开关（详见 custom/packages.seed）=====
+  EASYTIER_VARIANT: noweb
+  ZEROTIER_SOURCE: mwarning
+  DEFAULT_THEME: argon
+  TZ: Asia/Shanghai
+
+# 同一仓库只允许一个构建发布 latest；手动修复优先于排队中的旧定时任务。
+concurrency:
+  group: cr6608-build-release
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+
+    env:
+      UPLOAD_RELEASE: ${{ github.event.inputs.upload_release != 'false' }}
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: 初始化编译环境
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        echo "DATE=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+        mkdir -p "$GITHUB_WORKSPACE/ci-out"
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo rm -rf /usr/share/swift /usr/local/share/powershell /usr/lib/jvm 2>/dev/null || true
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install -y $(curl -fsSL https://raw.githubusercontent.com/immortalwrt/immortalwrt/openwrt-24.10/include/build-essential.txt)
+        sudo -E apt-get -qq install -y unzip rsync
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
+        sudo timedatectl set-timezone "$TZ"
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+        df -hT /workdir
+
+    - name: 同步上游源码
+      working-directory: /workdir
+      run: |
+        # 分支探测：候选分支里挑第一个真实存在的，上游换默认分支也不会失败
+        pick_branch() {
+          local b
+          for b in "$@"; do
+            if git ls-remote --exit-code --heads "$SOURCE_REPO" "$b" >/dev/null 2>&1; then
+              printf '%s\n' "$b"; return 0
+            fi
+          done
+          return 1
+        }
+        BR="$(pick_branch "$SOURCE_BRANCH" $SOURCE_FALLBACK_BRANCHES || true)"
+        if [ -z "$BR" ]; then
+          BR="$SOURCE_BRANCH"
+          echo "::warning::未能探测到候选分支，仍尝试使用 $BR"
+        fi
+        echo "SOURCE_BRANCH_ACTUAL=$BR" >> $GITHUB_ENV
+        echo "同步上游：$SOURCE_REPO [$BR]"
+        git clone --depth=1 -b "$BR" "$SOURCE_REPO" openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        git -C openwrt rev-parse HEAD > "$GITHUB_WORKSPACE/ci-out/source-commit.txt"
+        echo "上游提交：$(cat "$GITHUB_WORKSPACE/ci-out/source-commit.txt")"
+
+    - name: 恢复编译缓存
+      uses: actions/cache@v4
+      with:
+        path: /workdir/openwrt/.ccache
+        key: ${{ runner.os }}-ccache-cr6608-${{ github.run_id }}
+        restore-keys: |
+          ${{ runner.os }}-ccache-cr6608-
+
+    - name: 加载自定义feeds
+      run: |
+        [ -e feeds.conf.default ] && mv feeds.conf.default openwrt/feeds.conf.default
+        chmod +x scripts/diy-part1.sh scripts/diy-part2.sh scripts/custom/*.sh
+        cd openwrt
+        $GITHUB_WORKSPACE/scripts/diy-part1.sh
+
+    - name: 更新feeds
+      run: cd openwrt && ./scripts/feeds update -a
+
+    - name: 处理重复包（确保 xray-core 使用官方源版本）
+      run: |
+        cd openwrt
+        # passwall feed 里的 Xray-core 26.x 的 go.mod 要求 go >= 1.27，
+        # 而 openwrt-24.10 自带的 golang 只有 1.23.x，编译必然失败（Error 255）。
+        # 删掉 passwall 的重复定义，改用 immortalwrt 官方 packages 的 net/xray-core。
+        rm -rf feeds/passwall_packages/xray-core
+        echo "最终采用的 xray-core 来源："
+        grep -E '^PKG_NAME|^PKG_VERSION' feeds/packages/net/xray-core/Makefile
+
+    - name: 安装feeds
+      run: cd openwrt && ./scripts/feeds install -a
+
+    - name: 应用定制（插件清单 / 主题 / 机型 / 第三方插件）
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        cp -f .config openwrt/.config
+        cd openwrt
+        # 基础默认配置：默认 IP / 密码 / 主机名 / 时区 / WLAN / SSL 后端修复
+        $GITHUB_WORKSPACE/scripts/diy-part2.sh
+        # 万能定制：packages.seed + devices.* + 第三方插件（幂等、带架构/Go 版本兼容性过滤）
+        $GITHUB_WORKSPACE/scripts/custom/customize.sh "$GITHUB_WORKSPACE/custom"
+
+    - name: 生成配置并校验
+      run: |
+        cd openwrt
+        grep -E '^CONFIG_PACKAGE_[^=]+=y$' .config | sort > /tmp/requested.txt
+        echo "请求编译进固件的包数量: $(wc -l < /tmp/requested.txt)"
+
+        make defconfig
+
+        # ZeroTier 回退：若换成新版包后 zerotier 反而被 defconfig 丢弃，自动恢复 feeds 版
+        if [ -f "$GITHUB_WORKSPACE/ci-out/zerotier-fallback.env" ] && ! grep -q '^CONFIG_PACKAGE_zerotier=y' .config; then
+          echo "::warning::mwarning 版 zerotier 在 defconfig 中被丢弃，回退 feeds 自带版本"
+          set +e; . "$GITHUB_WORKSPACE/ci-out/zerotier-fallback.env"; set -e
+          rm -rf package/zerotier
+          if [ -n "${ZEROTIER_BACKUP:-}" ] && [ -d "${ZEROTIER_BACKUP}" ]; then
+            cp -a "${ZEROTIER_BACKUP}" feeds/packages/net/zerotier
+            ./scripts/feeds install zerotier >/dev/null 2>&1 || true
+            rm -rf tmp/.packageinfo tmp/.packageauxvars
+            make defconfig
+          fi
+        fi
+
+        echo "===== 代理核心 ====="
+        grep -E '^CONFIG_PACKAGE_(xray-core|v2ray-core|v2ray-geoip|v2ray-geosite)=y' .config || true
+        echo "===== 第三方插件 ====="
+        grep -E '^CONFIG_PACKAGE_(kmod-tun|luci-theme-argon|zerotier|luci-app-zerotier|easytier-noweb|luci-app-easytier|ddns-go|luci-app-ddns-go|luci-app-store|luci-app-wechatpush)=' .config || true
+        echo "===== SSL 后端（必须只有 1 个 libustream-ssl 变体）====="
+        cnt=$(grep -cE '^CONFIG_PACKAGE_libustream-(openssl|mbedtls|wolfssl)=y' .config || true)
+        echo "libustream-ssl 变体数量: $cnt"
+        if [ "$cnt" -ne 1 ]; then
+          echo "::error::libustream-ssl 变体数量必须为 1（当前 $cnt）"
+          exit 1
+        fi
+
+        # 被 kconfig 静默丢弃的请求项（写错包名 / provides 虚拟名 / 包不存在）
+        grep -E '^CONFIG_PACKAGE_[^=]+=y$' .config | sort > /tmp/resolved.txt
+        comm -23 /tmp/requested.txt /tmp/resolved.txt > /tmp/dropped.txt || true
+        if [ -s /tmp/dropped.txt ]; then
+          echo "::warning::以下包在 make defconfig 后被丢弃（多为 PROVIDES 虚拟名或包不存在，请核对真实包名）"
+          cat /tmp/dropped.txt
+        else
+          echo "所有请求的包都保留下来了"
+        fi
+
+        # 关键包硬校验：这些缺一个固件就不完整
+        fail=0
+        for p in xray-core v2ray-geoip v2ray-geosite adguardhome luci-app-passwall luci-app-openclash luci-theme-argon kmod-tun; do
+          if ! grep -q "^CONFIG_PACKAGE_${p}=y" .config; then
+            echo "::error::关键包未选中: ${p}"
+            fail=1
+          fi
+        done
+        grep -q '^CONFIG_PACKAGE_v2ray-core=y' .config && { echo "::error::v2ray-core 不应被选中"; fail=1; }
+        [ "$fail" -eq 0 ] || exit 1
+        echo "关键包校验通过"
+
+    - name: 下载DL库（完整系统）
+      run: |
+        cd openwrt
+        cp .config "$GITHUB_WORKSPACE/ci-out/full-expanded.config"
+        make download -j8 || make download -j1 V=s
+        find dl -size -1024c -exec ls -l {} \;
+
+    - name: 编译完整正式系统
+      id: compile
+      run: |
+        cd openwrt
+        echo "$(nproc) thread compile"
+        make -j$(nproc) || make -j1 V=s
+        test -f "bin/targets/ramips/mt7621/immortalwrt-ramips-mt7621-${DEVICE}-squashfs-sysupgrade.bin"
+        ls -lh bin/targets/ramips/mt7621/
+
+    - name: 收集完整正式系统
+      run: |
+        cd openwrt
+        F=$GITHUB_WORKSPACE/firmware
+        mkdir -p "$F"
+        cp -f "bin/targets/ramips/mt7621/immortalwrt-ramips-mt7621-${DEVICE}-squashfs-sysupgrade.bin" \
+          "$F/${ARTIFACT_PREFIX}-immortalwrt-squashfs-sysupgrade.bin"
+        cp -f "bin/targets/ramips/mt7621/immortalwrt-ramips-mt7621-${DEVICE}-squashfs-firmware.bin" \
+          "$F/${ARTIFACT_PREFIX}-immortalwrt-squashfs-firmware.bin"
+        cp -f "bin/targets/ramips/mt7621/immortalwrt-ramips-mt7621-${DEVICE}.manifest" "$F/"
+        cp -f bin/targets/ramips/mt7621/config.buildinfo "$F/" 2>/dev/null || cp .config "$F/config.buildinfo"
+        cp -f bin/targets/ramips/mt7621/feeds.buildinfo "$F/" 2>/dev/null || true
+        cp -f bin/targets/ramips/mt7621/profiles.json "$F/" 2>/dev/null || true
+        cp -f "$GITHUB_WORKSPACE/ci-out/full-expanded.config" "$F/full-expanded.config"
+        cp -f "$GITHUB_WORKSPACE/.config" "$F/config.seed"
+        cp -f $GITHUB_WORKSPACE/ci-out/*.plugins.md "$F/" 2>/dev/null || true
+        cp -f $GITHUB_WORKSPACE/ci-out/third-party-sources.txt "$F/" 2>/dev/null || true
+        cp -f $GITHUB_WORKSPACE/ci-out/version-pins.txt "$F/" 2>/dev/null || true
+        cp -f $GITHUB_WORKSPACE/ci-out/source-commit.txt "$F/" 2>/dev/null || true
+        cp -f "$GITHUB_WORKSPACE/custom/FLASHING.md" "$F/"
+        grep -m1 -oE '^kmod-nf-conntrack - [0-9][^ ]*' "$F/immortalwrt-ramips-mt7621-${DEVICE}.manifest" \
+          | awk '{print $3}' | cut -d- -f1 > "$F/kernel-version.txt" || echo unknown > "$F/kernel-version.txt"
+
+    - name: 暂存完整系统（救援盘失败时仍可下载排查）
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.ARTIFACT_PREFIX }}-full-system
+        path: firmware/*
+        retention-days: 3
+
+    - name: 单独生成轻量救援 initramfs
+      run: |
+        cd openwrt
+        # 保留已编译的 ipk/toolchain/dl，只清理会携带完整包列表的根文件系统。
+        # 不 patch 上游 image.mk、不更换内核、不改分区或 DTS。
+        cp "$GITHUB_WORKSPACE/custom/initramfs.config" .config
+        $GITHUB_WORKSPACE/scripts/diy-part2.sh initramfs
+        make defconfig
+        grep -q '^CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-cr6608=y$' .config
+        grep -q '^CONFIG_TARGET_ROOTFS_INITRAMFS=y$' .config
+        ! grep -qE '^CONFIG_PACKAGE_(adguardhome|xray-core|luci-app-passwall|luci-app-openclash|zerotier|ddns-go|luci-app-store)=y$' .config
+        make package/clean
+        make -j$(nproc) || make -j1 V=s
+        F=$GITHUB_WORKSPACE/firmware
+        cp -f "bin/targets/ramips/mt7621/immortalwrt-ramips-mt7621-${DEVICE}-initramfs-kernel.bin" \
+          "$F/${ARTIFACT_PREFIX}-immortalwrt-initramfs-kernel.bin"
+        cp -f "bin/targets/ramips/mt7621/immortalwrt-ramips-mt7621-${DEVICE}.manifest" "$F/initramfs.manifest"
+        cp -f .config "$F/initramfs-expanded.config"
+        echo "===== 轻量救援盘包数量 ====="
+        wc -l "$F/initramfs.manifest"
+        echo "===== 救援盘禁止包含的正式服务 ====="
+        ! grep -E '^(adguardhome|xray-core|zerotier|ddns-go|luci-app-passwall|luci-app-openclash|luci-app-store) ' "$F/initramfs.manifest"
+
+    - name: 校验固件结构、设备 ID、CRC 和尺寸
+      run: |
+        cd "$GITHUB_WORKSPACE/firmware"
+        python3 "$GITHUB_WORKSPACE/scripts/custom/verify-images.py" "$PWD" --prefix "$ARTIFACT_PREFIX"
+        # 原始 sysupgrade 正式内核也必须小于独立的 4MiB kernel 分区。
+        python3 - "$PWD/${ARTIFACT_PREFIX}-immortalwrt-squashfs-firmware.bin" <<'PY'
+        import struct, sys, zlib
+        p = sys.argv[1]
+        b = open(p, 'rb').read(4 * 1024 * 1024)
+        assert b[:4] == b'\x27\x05\x19\x56', 'firmware.bin 没有 uImage 内核头'
+        h = struct.unpack('>7I4B', b[:32])
+        assert h[3] + 64 <= len(b), 'firmware.bin 内核长度超出 4MiB 分区'
+        assert zlib.crc32(b[:4] + b'\0' * 4 + b[8:64]) & 0xffffffff == h[1]
+        assert zlib.crc32(b[64:]) & 0xffffffff == h[6]
+        assert b'\x55\x42\x49\x23' in open(p, 'rb').read(6 * 1024 * 1024)[4 * 1024 * 1024:], 'firmware.bin 缺少 UBI'
+        print('firmware.bin: 4MiB 内核 + UBI 布局与 CRC 校验通过')
+        PY
+        sha256sum * > sha256sums.txt
+        ls -lh
+
+    - name: 上传固件到Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.ARTIFACT_PREFIX }}-OpenWrt
+        path: firmware/*
+        retention-days: 7
+
+    - name: 发布 Release（时间戳 tag + latest + 清理旧版本）
+      if: env.UPLOAD_RELEASE == 'true' && success()
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        chmod +x scripts/custom/release.sh
+        export VERSION_KERNEL="$(cat firmware/kernel-version.txt 2>/dev/null || echo unknown)"
+        export SOURCE_BRANCH="${SOURCE_BRANCH_ACTUAL:-$SOURCE_BRANCH}"
+        scripts/custom/release.sh firmware "$RELEASE_PREFIX" "$KEEP_RECENT" "$KEEP_MONTHS"
+
+    - name: 自动更新 README
+      if: success()
+      run: |
+        chmod +x scripts/custom/gen-readme.sh
+        scripts/custom/gen-readme.sh "$GITHUB_WORKSPACE"
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        if ! git diff --quiet -- README.md; then
+          git add README.md
+          git commit -m "docs: 自动更新 README [skip ci]"
+          git push
+          echo "README 已更新并提交"
+        else
+          echo "README 无变化"
+        fi
