@@ -8,6 +8,10 @@ on:
         description: '发布 Release'
         type: boolean
         default: true
+      reuse_full_run_id:
+        description: '复用指定 run 的完整系统 Artifact（留空则完整编译）'
+        type: string
+        default: ''
   # 推送到 main 时自动编译（仅当配置 / 定制 / 脚本 / 工作流变化）
   push:
     branches:
@@ -23,6 +27,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 env:
   # ===== 上游源码（想换成自己的 fork 就改这两行，例如 https://github.com/wdss133/immortalwrt.git）=====
@@ -57,6 +62,7 @@ jobs:
 
     env:
       UPLOAD_RELEASE: ${{ github.event.inputs.upload_release != 'false' }}
+      REUSE_FULL_RUN: ${{ github.event.inputs.reuse_full_run_id }}
 
     steps:
     - name: 检出代码
@@ -116,6 +122,7 @@ jobs:
           ${{ runner.os }}-ccache-cr6608-
 
     - name: 加载自定义feeds
+      if: env.REUSE_FULL_RUN == ''
       run: |
         [ -e feeds.conf.default ] && mv feeds.conf.default openwrt/feeds.conf.default
         chmod +x scripts/diy-part1.sh scripts/diy-part2.sh scripts/custom/*.sh
@@ -139,6 +146,7 @@ jobs:
       run: cd openwrt && ./scripts/feeds install -a
 
     - name: 应用定制（插件清单 / 主题 / 机型 / 第三方插件）
+      if: env.REUSE_FULL_RUN == ''
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
@@ -150,6 +158,7 @@ jobs:
         $GITHUB_WORKSPACE/scripts/custom/customize.sh "$GITHUB_WORKSPACE/custom"
 
     - name: 生成配置并校验
+      if: env.REUSE_FULL_RUN == ''
       run: |
         cd openwrt
         grep -E '^CONFIG_PACKAGE_[^=]+=y$' .config | sort > /tmp/requested.txt
@@ -205,6 +214,7 @@ jobs:
         echo "关键包校验通过"
 
     - name: 下载DL库（完整系统）
+      if: env.REUSE_FULL_RUN == ''
       run: |
         cd openwrt
         cp .config "$GITHUB_WORKSPACE/ci-out/full-expanded.config"
@@ -212,6 +222,7 @@ jobs:
         find dl -size -1024c -exec ls -l {} \;
 
     - name: 编译完整正式系统
+      if: env.REUSE_FULL_RUN == ''
       id: compile
       run: |
         cd openwrt
@@ -221,6 +232,7 @@ jobs:
         ls -lh bin/targets/ramips/mt7621/
 
     - name: 收集完整正式系统
+      if: env.REUSE_FULL_RUN == ''
       run: |
         cd openwrt
         F=$GITHUB_WORKSPACE/firmware
@@ -244,11 +256,21 @@ jobs:
           | awk '{print $3}' | cut -d- -f1 > "$F/kernel-version.txt" || echo unknown > "$F/kernel-version.txt"
 
     - name: 暂存完整系统（救援盘失败时仍可下载排查）
+      if: env.REUSE_FULL_RUN == ''
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.ARTIFACT_PREFIX }}-full-system
         path: firmware/*
         retention-days: 3
+
+    - name: 复用已留存的完整系统
+      if: env.REUSE_FULL_RUN != ''
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ env.ARTIFACT_PREFIX }}-full-system
+        path: firmware
+        run-id: ${{ env.REUSE_FULL_RUN }}
+        github-token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: 单独生成轻量救援 initramfs
       run: |
