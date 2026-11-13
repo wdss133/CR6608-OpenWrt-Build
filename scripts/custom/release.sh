@@ -84,14 +84,15 @@ BODY="$WORK/body.md"
   echo "- 目标机型：\`${DEVICE_NAME}\`（MT7621，ramips/mt7621）"
   echo "- 默认主题：**argon**（已确保无 aurora 主题）"
   echo "- 默认地址：**192.168.1.1**"
-  echo "- 默认密码：**qq3429510**"
+  echo "- 默认密码：**password**（首次登录后请立即修改）"
   echo "- 内核版本：**${VERSION_KERNEL}**"
   echo "- 编译时间：${NOW}"
   echo ""
   echo "### 🚨 刷机文件别选错"
   echo ""
   if [ -f "$ART_DIR/FLASHING.md" ]; then
-    cat "$ART_DIR/FLASHING.md"
+    # FLASHING.md 自带 H1/H2；嵌入 Release 说明时降级，避免打乱整页层级。
+    sed -e 's/^# /#### /' -e 's/^## /##### /' "$ART_DIR/FLASHING.md"
   else
     echo "- PB-Boot 首次/恢复：先刷轻量 initramfs，启动后再刷完整 sysupgrade，**不保留配置**。"
     echo "- 已运行 OpenWrt/ImmortalWrt：只刷 sysupgrade；跨大版本同样不保留配置。"
