@@ -61,8 +61,10 @@ def main():
     prefix = args.prefix
     sysupgrade = root / f"{prefix}-immortalwrt-squashfs-sysupgrade.bin"
     initramfs = root / f"{prefix}-immortalwrt-initramfs-kernel.bin"
+    firmware = root / f"{prefix}-immortalwrt-squashfs-firmware.bin"
     assert sysupgrade.is_file(), f"缺少 {sysupgrade.name}"
     assert initramfs.is_file(), f"缺少 {initramfs.name}"
+    assert firmware.is_file(), f"缺少 {firmware.name}"
 
     report = {"device": DEVICE, "static_validation": "PASS", "images": {}}
     manifest = root / f"immortalwrt-ramips-mt7621-{DEVICE}.manifest"
@@ -118,6 +120,32 @@ def main():
     assert info["version"]["target"] == "ramips/mt7621", "目标平台不匹配"
     assert DT_COMPATIBLE in info.get("new_supported_devices", []), "设备 compatible 不匹配"
     report["images"]["sysupgrade"]["metadata"] = info
+
+    # firmware.bin = uImage 内核 -> 填充到 4MiB -> UBI。CRC 只覆盖 uImage 的
+    # 真实 data size，不能把 4MiB 对齐填充一起算进去（这正是旧校验误报的原因）。
+    fw = firmware.read_bytes()
+    assert len(fw) >= KERNEL_LIMIT + 4, "firmware.bin 不足 4MiB 内核区 + UBI 头"
+    head = fw[:KERNEL_LIMIT]
+    fields = struct.unpack(">7I4B", head[:32])
+    magic, hcrc, _, size, load, entry, dcrc, os_id, arch, kind, comp = fields
+    assert magic == 0x27051956, "firmware.bin: 不是 legacy uImage 内核"
+    assert arch == 5, "firmware.bin: 不是 MIPS 内核"
+    assert kind == 2, "firmware.bin: uImage 类型不是 kernel"
+    assert size + 64 <= KERNEL_LIMIT, "firmware.bin: 内核超过 4MiB 分区"
+    header = bytearray(head[:64])
+    header[4:8] = b"\0" * 4
+    assert zlib.crc32(header) & 0xFFFFFFFF == hcrc, "firmware.bin: 内核头 CRC 错误"
+    assert zlib.crc32(head[64:64 + size]) & 0xFFFFFFFF == dcrc, \
+        "firmware.bin: 内核数据 CRC 错误（应按 uImage data size 计算，而非 4MiB 填充区）"
+    assert fw[KERNEL_LIMIT:KERNEL_LIMIT + 4] == UBI_MAGIC, \
+        "firmware.bin: 4MiB 偏移处不是 UBI 头"
+    report["images"]["firmware"] = {
+        "bytes": len(fw),
+        "kernel_bytes": size + 64,
+        "kernel_crc": "OK",
+        "ubi_offset": KERNEL_LIMIT,
+        "layout": "uImage kernel + 4MiB pad + UBI",
+    }
 
     ramdisk = uimage(initramfs, 2)
     assert ramdisk["bytes"] <= INITRAMFS_LIMIT, (
