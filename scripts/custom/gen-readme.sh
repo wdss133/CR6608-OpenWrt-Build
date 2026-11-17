@@ -93,6 +93,7 @@ $(added_block)
 - 也可在 Actions 页手动 \`Run workflow\`（可选是否发布 Release）；
 - 每次编译后自动重新生成这份 README 并提交回仓库。
 - 想换上游源码：改 \`${WORKFLOW_FILE}\` 里的 \`SOURCE_REPO\` / \`SOURCE_BRANCH\` 即可，脚本会自动探测可用分支。
+- 构建缓存：恢复 \`.ccache\` 与 \`staging_dir/host*\`、\`staging_dir/tool*\`，避免每次重编主机/交叉工具链；GitHub 缓存默认 7 天未访问会清理，月度构建建议在 Settings → Actions → General 把 Cache retention 调到 90 天。
 
 上游源码：${SOURCE_REPO}（分支 ${SOURCE_BRANCH}）。
 
