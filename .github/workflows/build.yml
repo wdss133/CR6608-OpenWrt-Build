@@ -65,12 +65,22 @@ jobs:
           fi
           today="$(TZ=Asia/Shanghai date '+%d')"
           tomorrow="$(TZ=Asia/Shanghai date -d tomorrow '+%d')"
-          if [ "$today" = "01" ] || [ "$tomorrow" = "01" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
+          run=false
+          case "${{ github.event.schedule }}" in
+            "0 15 1 * *")
+              # GitHub 定时可能延迟，月初允许延迟到 2 日执行
+              if [ "$today" = "01" ] || [ "$today" = "02" ]; then run=true; fi
+              ;;
+            "0 15 28-31 * *")
+              # 只认当月最后一天；延迟跨月则跳过，避免和下月 1 日重复
+              if [ "$tomorrow" = "01" ]; then run=true; fi
+              ;;
+          esac
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          if [ "$run" = "true" ]; then
             echo "上海时间 $(TZ=Asia/Shanghai date '+%F %H:%M')：月初/月末构建"
           else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "上海时间 $(TZ=Asia/Shanghai date '+%F %H:%M')：非月初/月末，跳过"
+            echo "上海时间 $(TZ=Asia/Shanghai date '+%F %H:%M')：非月初/月末或已跨月，跳过"
           fi
 
   build:
