@@ -89,7 +89,7 @@ $(added_block)
 - 凡是不符合 \`${PREFIX}-YYYYMMDD-HHMM\` 格式的历史 Release（旧的运行编号式命名，如 \`${PREFIX}-2\`）会被自动清理，列表里只会剩一种命名。
 
 ### 5) 自动化
-- 每月 **1 日**与**当月最后一天**的**上海时间 23:00**（UTC 15:00；上海时间即北京时间 UTC+8）自动同步上游源码并编译（\`${WORKFLOW_FILE}\`）；
+- 每月 **1 日**（GitHub 定时延迟时可能顺延至 2 日）与**当月最后一天**的**上海时间 23:00**（UTC 15:00；上海时间即北京时间 UTC+8）自动同步上游源码并编译（\`${WORKFLOW_FILE}\`）；
 - 也可在 Actions 页手动 \`Run workflow\`（可选是否发布 Release）；
 - 每次编译后自动重新生成这份 README 并提交回仓库。
 - 想换上游源码：改 \`${WORKFLOW_FILE}\` 里的 \`SOURCE_REPO\` / \`SOURCE_BRANCH\` 即可，脚本会自动探测可用分支。
