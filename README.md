@@ -47,29 +47,27 @@
 - 命名规则只有一种：`CR6608-YYYYMMDD-HHMM`（北京时间），不再使用运行编号式命名；
 - 自动清理，保留规则（取并集）：
   1. 滚动 `CR6608-latest`
-  2. 最近 **36** 次编译（每天一份，约等于最近 36 天）
+  2. 最近 **36** 次编译（每月 2 次，约等于最近 18 个月）
   3. **每月最后一次编译**（月度归档），保留最近 **36** 个月 ≈ **3 年**
   4. 当天的全部编译
 - 凡是不符合 `CR6608-YYYYMMDD-HHMM` 格式的历史 Release（旧的运行编号式命名，如 `CR6608-2`）会被自动清理，列表里只会剩一种命名。
 
 ### 5) 自动化
-- 每天**北京时间 21:00**（UTC 13:00）自动同步上游源码并编译（`.github/workflows/build.yml`）；
+- 每月 **1 日**与**当月最后一天**的**上海时间 23:00**（UTC 15:00；上海时间即北京时间 UTC+8）自动同步上游源码并编译（`.github/workflows/build.yml`）；
 - 也可在 Actions 页手动 `Run workflow`（可选是否发布 Release）；
 - 每次编译后自动重新生成这份 README 并提交回仓库。
 - 想换上游源码：改 `.github/workflows/build.yml` 里的 `SOURCE_REPO` / `SOURCE_BRANCH` 即可，脚本会自动探测可用分支。
 
 上游源码：https://github.com/immortalwrt/immortalwrt.git（分支 openwrt-24.10）。
 
-### 6) 上游变化时的自我保护（保证每天都能产出固件）
+### 6) 上游变化时的自我保护（保证每次都能产出固件）
 上游仓库随时会变，这套脚本对常见变化都做了兜底：
 
 | 上游可能的变化 | 脚本的应对 |
 |---|---|
 | 默认分支改名 / 换分支 | 候选分支自动探测（`SOURCE_FALLBACK_BRANCHES`），探测不到才报错 |
 | 第三方仓库把 master 改 main | `git ls-remote` 探测实际存在的分支 + 克隆失败重试 3 次 |
-| 插件不支持本机架构 | CR6608 明确使用 mipsel_24kc；检查预编译包的架构白名单与映射，不支持则跳过并告警 |
-| 救援盘被全部插件撑大 | `custom/initramfs.config` 独立构建轻量 initramfs，超过 24MiB 直接拒绝发布 |
-| 镜像机型/结构错误 | `verify-images.py` 检查设备元数据、uImage CRC、squashfs、4MiB 内核与镜像尺寸 |
+| 插件不支持本机架构 | 读插件 Makefile 的架构白名单与 `APP_ARCH` 映射，不支持就跳过并告警 |
 | Go 插件跟进新版 Go（如 ddns-go 6.13+ 要求 go ≥ 1.25） | **自动回退**到与源码树 golang 兼容的版本，现算 `PKG_HASH` 写回；找不到才跳过 |
 | 包名写错 / PROVIDES 虚拟名 | defconfig 前后比对，被静默丢弃的包会在日志里列出（warning） |
 | 关键包缺失 | xray-core / geoip / geosite / adguardhome / passwall / openclash / argon / kmod-tun 硬校验，缺失即失败 |
@@ -102,9 +100,6 @@
 | `scripts/custom/customize.sh` | 应用全部定制（插件清单 / 主题 / 机型筛选 / 第三方插件拉取与版本表） |
 | `scripts/custom/release.sh` | 时间戳 tag 发布 + `latest` + 保留策略清理 |
 | `scripts/custom/gen-readme.sh` | 生成本 README |
-| `scripts/custom/verify-images.py` | 固件设备 ID / CRC / 分区大小 / initramfs 上限验收 |
-| `custom/initramfs.config` | 轻量救援盘独立包清单 |
-| `custom/FLASHING.md` | 按刷机入口区分的操作说明 |
 | `custom/packages.seed` | 新增 / 启用插件清单（改包只改这里） |
 | `custom/devices.include`、`devices.exclude` | 机型白名单 / 黑名单 |
 | `.config` | 基础配置（目标平台、基础包、PassWall 等） |
