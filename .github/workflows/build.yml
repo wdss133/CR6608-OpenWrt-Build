@@ -118,6 +118,7 @@ jobs:
         df -hT /workdir
 
     - name: 同步上游源码
+      id: sync
       working-directory: /workdir
       run: |
         # 分支探测：候选分支里挑第一个真实存在的，上游换默认分支也不会失败
@@ -141,14 +142,35 @@ jobs:
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
         git -C openwrt rev-parse HEAD > "$GITHUB_WORKSPACE/ci-out/source-commit.txt"
         echo "上游提交：$(cat "$GITHUB_WORKSPACE/ci-out/source-commit.txt")"
+        echo "commit=$(cat "$GITHUB_WORKSPACE/ci-out/source-commit.txt")" >> "$GITHUB_OUTPUT"
 
-    - name: 恢复编译缓存
+    - name: 恢复编译缓存（ccache + 主机/交叉工具链）
+      id: cache
       uses: actions/cache@v4
       with:
-        path: /workdir/openwrt/.ccache
-        key: ${{ runner.os }}-ccache-cr6608-${{ github.run_id }}
+        path: |
+          /workdir/openwrt/.ccache
+          /workdir/openwrt/staging_dir/host*
+          /workdir/openwrt/staging_dir/tool*
+        key: ${{ runner.os }}-build-cr6608-${{ steps.sync.outputs.commit }}-${{ hashFiles('.config', 'custom/**', 'scripts/**', '.github/workflows/build.yml') }}
         restore-keys: |
+          ${{ runner.os }}-build-cr6608-
           ${{ runner.os }}-ccache-cr6608-
+
+    - name: 修复恢复缓存的编译时间戳
+      if: steps.cache.outputs.cache-matched-key != ''
+      run: |
+        # 与 AX6 相同：缓存恢复后刷新 host/tool 的 stamp，避免 make 因
+        # 文件时间戳变化重编整套工具链；target 的 stamp 不动。
+        if [ -d /workdir/openwrt/staging_dir ]; then
+          find /workdir/openwrt/staging_dir -type d -name stamp -not -path "*target*" -print0 \
+            | while IFS= read -r -d '' dir; do
+                find "$dir" -type f -exec touch {} +
+              done
+          mkdir -p /workdir/openwrt/tmp
+          echo 1 > /workdir/openwrt/tmp/.build
+        fi
+        echo "已恢复缓存: ${{ steps.cache.outputs.cache-matched-key }}"
 
     - name: 加载自定义feeds
       if: env.REUSE_FULL_RUN == ''
