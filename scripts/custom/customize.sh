@@ -154,6 +154,21 @@ config_set "$MAIN_CONFIG" CONFIG_PACKAGE_kmod-tun y
 config_set "$MAIN_CONFIG" CONFIG_PACKAGE_luci-theme-aurora n
 config_set "$MAIN_CONFIG" CONFIG_PACKAGE_luci-app-aurora-config n
 
+# 桥接防火墙硬需求：透明网桥 / 上游 DHCP 屏蔽需要 nft bridge 和 ebtables。
+# 即使 packages.seed 被上游或手工改漏，这里也会在每次源码同步后重新写回。
+for sym in \
+  kmod-nft-bridge \
+  kmod-ebtables \
+  kmod-ebtables-ipv4 \
+  kmod-ebtables-ipv6 \
+  kmod-br-netfilter \
+  ebtables-legacy \
+  ebtables-legacy-utils
+do
+  config_set "$MAIN_CONFIG" "CONFIG_PACKAGE_${sym}" y
+done
+log "已强制启用桥接防火墙模块（nft bridge / ebtables / br_netfilter）"
+
 ############################ 2. 移除 Aurora 主题 ############################
 # CR6608 当前用的是 argon，正常情况下这里没有可删的；
 # 保留该逻辑是为了「上游/别人换成 aurora 时也能一直用」。
@@ -493,4 +508,4 @@ grep -q '^CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-cr6608=y$' "$MAIN_
 safe_rm tmp/.packageinfo tmp/.targetinfo tmp/.packageauxvars
 
 log "定制完成，当前关键项："
-grep -E '^CONFIG_PACKAGE_(kmod-tun|luci-theme-argon|luci-app-argon-config|luci-theme-aurora|zerotier|luci-app-zerotier|easytier|easytier-noweb|luci-app-easytier|ddns-go|luci-app-ddns-go|frpc|frps|luci-app-frpc|luci-app-frps|luci-app-store|luci-app-wechatpush|xray-core|v2ray-core)=' "$MAIN_CONFIG" || true
+grep -E '^CONFIG_PACKAGE_(kmod-tun|kmod-nft-bridge|kmod-ebtables|kmod-ebtables-ipv4|kmod-ebtables-ipv6|kmod-br-netfilter|ebtables-legacy|ebtables-legacy-utils|luci-theme-argon|luci-app-argon-config|luci-theme-aurora|zerotier|luci-app-zerotier|easytier|easytier-noweb|luci-app-easytier|ddns-go|luci-app-ddns-go|frpc|frps|luci-app-frpc|luci-app-frps|luci-app-store|luci-app-wechatpush|xray-core|v2ray-core)=' "$MAIN_CONFIG" || true
