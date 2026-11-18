@@ -275,6 +275,50 @@ else
   warn "ddns-go 获取失败，本次编译将不含 ddns-go"
 fi
 
+# --- FRP（frpc/frps）：使用 laipeng668 的 mipsle 预编译包，避免 Go 1.26 源码编译 ---
+frp_dir="$SOURCE_TMP/frp-packages"
+frp_luci_dir="$SOURCE_TMP/frp-luci"
+if fetch_repo https://github.com/laipeng668/packages.git "$frp_dir" frp-binary; then
+  if [ -f "$frp_dir/net/frp/Makefile" ]; then
+    safe_rm feeds/packages/net/frp package/feeds/packages/frp package/frp
+    cp -a "$frp_dir/net/frp" package/frp
+    rm -rf package/frp/.git
+    config_set "$MAIN_CONFIG" CONFIG_PACKAGE_frpc y
+    config_set "$MAIN_CONFIG" CONFIG_PACKAGE_frps y
+    log "  已加入 frpc/frps（laipeng668/packages frp-binary，mipsle 预编译）"
+  else
+    warn "FRP 包目录结构变化，未找到 net/frp/Makefile，跳过 FRP"
+    config_set "$MAIN_CONFIG" CONFIG_PACKAGE_frpc n
+    config_set "$MAIN_CONFIG" CONFIG_PACKAGE_frps n
+  fi
+else
+  warn "FRP 包源获取失败，本次编译将不含 FRP"
+  config_set "$MAIN_CONFIG" CONFIG_PACKAGE_frpc n
+  config_set "$MAIN_CONFIG" CONFIG_PACKAGE_frps n
+fi
+
+if fetch_repo https://github.com/laipeng668/luci.git "$frp_luci_dir" frp; then
+  for pkg in luci-app-frpc luci-app-frps; do
+    if [ -f "$frp_luci_dir/applications/$pkg/Makefile" ]; then
+      safe_rm "feeds/luci/applications/$pkg" "package/feeds/luci/$pkg" "package/$pkg"
+      cp -a "$frp_luci_dir/applications/$pkg" "package/$pkg"
+      rm -rf "package/$pkg/.git"
+      # 原 Makefile 在 feeds/luci/applications 下使用 ../../luci.mk；
+      # 移到 package/ 顶层后要指向实际 feeds/luci/luci.mk。
+      sed -i 's|include ../../luci.mk|include $(TOPDIR)/feeds/luci/luci.mk|' "package/$pkg/Makefile"
+      config_set "$MAIN_CONFIG" "CONFIG_PACKAGE_$pkg" y
+      log "  已加入 $pkg"
+    else
+      warn "FRP LuCI 缺少 $pkg/Makefile，跳过该界面"
+      config_set "$MAIN_CONFIG" "CONFIG_PACKAGE_$pkg" n
+    fi
+  done
+else
+  warn "FRP LuCI 源获取失败，本次编译将不含 FRP 界面"
+  config_set "$MAIN_CONFIG" CONFIG_PACKAGE_luci-app-frpc n
+  config_set "$MAIN_CONFIG" CONFIG_PACKAGE_luci-app-frps n
+fi
+
 # --- iStore：4 个子包放到 package/ 顶层（与参考项目已验证的落位一致）---
 istore_src="$SOURCE_TMP/istore"
 if fetch_repo https://github.com/linkease/istore.git "$istore_src" main master; then
@@ -352,6 +396,12 @@ plugin_row "ZeroTier" \
 plugin_row "ddns-go" \
   "$(pkg_ver "package/ddns-go/Makefile")" \
   "$(git_date "$ddns_dir")" "https://github.com/sirpdboy/luci-app-ddns-go"
+plugin_row "FRP frpc/frps" \
+  "$(pkg_ver "package/frp/Makefile")" \
+  "$(git_date "${frp_dir:-}")" "https://github.com/laipeng668/packages (frp-binary)"
+plugin_row "LuCI FRP" \
+  "$(pkg_ver "package/luci-app-frpc/Makefile" "package/luci-app-frps/Makefile")" \
+  "$(git_date "${frp_luci_dir:-}")" "https://github.com/laipeng668/luci (frp)"
 plugin_row "iStore (luci-app-store)" \
   "$(pkg_ver "package/luci-app-store/Makefile")" \
   "$(git_date "$istore_src")" "https://github.com/linkease/istore"
@@ -443,4 +493,4 @@ grep -q '^CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-cr6608=y$' "$MAIN_
 safe_rm tmp/.packageinfo tmp/.targetinfo tmp/.packageauxvars
 
 log "定制完成，当前关键项："
-grep -E '^CONFIG_PACKAGE_(kmod-tun|luci-theme-argon|luci-app-argon-config|luci-theme-aurora|zerotier|luci-app-zerotier|easytier|easytier-noweb|luci-app-easytier|ddns-go|luci-app-ddns-go|luci-app-store|luci-app-wechatpush|xray-core|v2ray-core)=' "$MAIN_CONFIG" || true
+grep -E '^CONFIG_PACKAGE_(kmod-tun|luci-theme-argon|luci-app-argon-config|luci-theme-aurora|zerotier|luci-app-zerotier|easytier|easytier-noweb|luci-app-easytier|ddns-go|luci-app-ddns-go|frpc|frps|luci-app-frpc|luci-app-frps|luci-app-store|luci-app-wechatpush|xray-core|v2ray-core)=' "$MAIN_CONFIG" || true
