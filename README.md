@@ -28,6 +28,10 @@
 - luci-app-zerotier
 - ddns-go
 - luci-app-ddns-go
+- frpc
+- frps
+- luci-app-frpc
+- luci-app-frps
 - luci-app-store
 - luci-lib-taskd
 - luci-lib-xterm
