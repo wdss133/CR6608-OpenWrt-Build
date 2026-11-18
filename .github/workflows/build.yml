@@ -375,13 +375,34 @@ jobs:
       if: success()
       run: |
         chmod +x scripts/custom/gen-readme.sh
-        scripts/custom/gen-readme.sh "$GITHUB_WORKSPACE"
         git config user.name "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        if ! git diff --quiet -- README.md; then
+
+        # 构建期间 main 可能被手动提交推进；先同步远端再生成，
+        # 否则 CI 的 README commit 会因 non-fast-forward 被拒绝。
+        git fetch origin main
+        git reset --hard origin/main
+        scripts/custom/gen-readme.sh "$GITHUB_WORKSPACE"
+
+        commit_readme() {
           git add README.md
+          if git diff --cached --quiet; then
+            echo "README 无变化"
+            return 0
+          fi
           git commit -m "docs: 自动更新 README [skip ci]"
-          git push
+        }
+
+        if ! git diff --quiet -- README.md; then
+          commit_readme
+          if ! git push; then
+            # 极端并发：再同步一次、重新生成，避免 README 冲突
+            git fetch origin main
+            git reset --hard origin/main
+            scripts/custom/gen-readme.sh "$GITHUB_WORKSPACE"
+            commit_readme
+            git push
+          fi
           echo "README 已更新并提交"
         else
           echo "README 无变化"
