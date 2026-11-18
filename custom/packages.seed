@@ -27,6 +27,12 @@ CONFIG_PACKAGE_luci-app-zerotier=y
 CONFIG_PACKAGE_ddns-go=y
 CONFIG_PACKAGE_luci-app-ddns-go=y
 
+# ---- FRP（frpc 客户端 + frps 服务端，使用 mipsle 预编译二进制）----
+CONFIG_PACKAGE_frpc=y
+CONFIG_PACKAGE_frps=y
+CONFIG_PACKAGE_luci-app-frpc=y
+CONFIG_PACKAGE_luci-app-frps=y
+
 # ---- iStore 应用商店 ----
 CONFIG_PACKAGE_luci-app-store=y
 CONFIG_PACKAGE_luci-lib-taskd=y
