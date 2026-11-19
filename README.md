@@ -22,6 +22,7 @@
 - luci-theme-argon
 - luci-app-argon-config
 - kmod-tun
+- mihomo-core（OpenClash 预装 Mihomo 内核）
 - kmod-nft-bridge
 - kmod-ebtables
 - kmod-ebtables-ipv4
