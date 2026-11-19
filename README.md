@@ -22,9 +22,6 @@
 - luci-theme-argon
 - luci-app-argon-config
 - kmod-tun
-- mihomo-core（OpenClash 预装 Mihomo 内核）
-- xray-bin（PassWall 预装 Xray 26.11.9）
-- sing-box-bin（PassWall 预装 sing-box 1.14.4）
 - kmod-nft-bridge
 - kmod-ebtables
 - kmod-ebtables-ipv4
@@ -36,6 +33,10 @@
 - luci-app-easytier
 - zerotier
 - luci-app-zerotier
+- mihomo-core
+- luci-app-passwall
+- xray-bin
+- sing-box-bin
 - ddns-go
 - luci-app-ddns-go
 - frpc
@@ -82,7 +83,9 @@
 |---|---|
 | 默认分支改名 / 换分支 | 候选分支自动探测（`SOURCE_FALLBACK_BRANCHES`），探测不到才报错 |
 | 第三方仓库把 master 改 main | `git ls-remote` 探测实际存在的分支 + 克隆失败重试 3 次 |
-| 插件不支持本机架构 | 读插件 Makefile 的架构白名单与 `APP_ARCH` 映射，不支持就跳过并告警 |
+| 插件不支持本机架构 | CR6608 明确使用 mipsel_24kc；检查预编译包的架构白名单与映射，不支持则跳过并告警 |
+| 救援盘被全部插件撑大 | `custom/initramfs.config` 独立构建轻量 initramfs，超过 24MiB 直接拒绝发布 |
+| 镜像机型/结构错误 | `verify-images.py` 检查设备元数据、uImage CRC、squashfs、4MiB 内核与镜像尺寸 |
 | Go 插件跟进新版 Go（如 ddns-go 6.13+ 要求 go ≥ 1.25） | **自动回退**到与源码树 golang 兼容的版本，现算 `PKG_HASH` 写回；找不到才跳过 |
 | 包名写错 / PROVIDES 虚拟名 | defconfig 前后比对，被静默丢弃的包会在日志里列出（warning） |
 | 关键包缺失 | xray-bin / sing-box-bin / geoip / geosite / passwall / openclash / argon / kmod-tun 硬校验，缺失即失败；AdGuardHome 强制禁用 |
@@ -115,6 +118,9 @@
 | `scripts/custom/customize.sh` | 应用全部定制（插件清单 / 主题 / 机型筛选 / 第三方插件拉取与版本表） |
 | `scripts/custom/release.sh` | 时间戳 tag 发布 + `latest` + 保留策略清理 |
 | `scripts/custom/gen-readme.sh` | 生成本 README |
+| `scripts/custom/verify-images.py` | 固件设备 ID / CRC / 分区大小 / initramfs 上限验收 |
+| `custom/initramfs.config` | 轻量救援盘独立包清单 |
+| `custom/FLASHING.md` | 按刷机入口区分的操作说明 |
 | `custom/packages.seed` | 新增 / 启用插件清单（改包只改这里） |
 | `custom/devices.include`、`devices.exclude` | 机型白名单 / 黑名单 |
 | `.config` | 基础配置（目标平台、基础包、PassWall 等） |
