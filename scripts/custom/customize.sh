@@ -334,6 +334,76 @@ else
   config_set "$MAIN_CONFIG" CONFIG_PACKAGE_luci-app-frps n
 fi
 
+# --- Mihomo core for OpenClash：把官方 mipsle-softfloat 内核直接预装进固件 ---
+# 当前 ImmortalWrt feed 的 luci-app-openclash 没有 LUCI_APP_OPENCLASH_INCLUDE_CORE 选项，
+# 因此不升级插件，而是单独放一个只负责安装 /etc/openclash/core/clash_meta 的内核包。
+mihomo_core_dir="$SOURCE_TMP/mihomo-core"
+if [ "$ARCH_NAME" = "mipsel" ]; then
+  mkdir -p "$mihomo_core_dir" package/mihomo-core/files
+  core_ok=0
+  for core_url in \
+    "https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-linux-mipsle-softfloat.tar.gz" \
+    "https://github.com/vernesong/OpenClash/raw/refs/heads/core/master/meta/clash-linux-mipsle-softfloat.tar.gz"
+  do
+    if curl -fLsS --connect-timeout 20 --retry 3 "$core_url" -o "$mihomo_core_dir/clash_meta.tar.gz"; then
+      if tar -xzf "$mihomo_core_dir/clash_meta.tar.gz" -C "$mihomo_core_dir" clash; then
+        cp -f "$mihomo_core_dir/clash" package/mihomo-core/files/clash_meta
+        chmod 0755 package/mihomo-core/files/clash_meta
+        core_ok=1
+        break
+      fi
+    fi
+    warn "Mihomo 内核下载失败，尝试下一个地址: $core_url"
+  done
+
+  if [ "$core_ok" -eq 1 ]; then
+    cat > package/mihomo-core/Makefile <<'EOF'
+include $(TOPDIR)/rules.mk
+
+PKG_NAME:=mihomo-core
+PKG_VERSION:=2026.11
+PKG_RELEASE:=1
+PKG_LICENSE:=GPL-3.0
+
+include $(INCLUDE_DIR)/package.mk
+
+define Build/Prepare
+	mkdir -p $(PKG_BUILD_DIR)
+endef
+
+define Build/Compile
+endef
+
+define Package/mihomo-core
+	SECTION:=net
+	CATEGORY:=Network
+	TITLE:=Mihomo (Clash Meta) core for OpenClash
+	DEPENDS:=@mipsel +luci-app-openclash
+	PKGARCH:=$(ARCH_PACKAGES)
+endef
+
+define Package/mihomo-core/description
+	Preinstalled Mihomo Meta core for OpenClash (mipsle softfloat).
+endef
+
+define Package/mihomo-core/install
+	$(INSTALL_DIR) $(1)/etc/openclash/core
+	$(INSTALL_BIN) $(CURDIR)/files/clash_meta $(1)/etc/openclash/core/clash_meta
+endef
+
+$(eval $(call BuildPackage,mihomo-core))
+EOF
+    config_set "$MAIN_CONFIG" CONFIG_PACKAGE_mihomo-core y
+    log "  已加入 OpenClash Mihomo 内核（mipsle softfloat）"
+  else
+    warn "Mihomo 内核全部下载失败，本次固件将不含预装核心"
+    config_set "$MAIN_CONFIG" CONFIG_PACKAGE_mihomo-core n
+  fi
+else
+  warn "当前架构 ${ARCH_NAME} 不是 mipsel，跳过 Mihomo 内核预装"
+  config_set "$MAIN_CONFIG" CONFIG_PACKAGE_mihomo-core n
+fi
+
 # --- iStore：4 个子包放到 package/ 顶层（与参考项目已验证的落位一致）---
 istore_src="$SOURCE_TMP/istore"
 if fetch_repo https://github.com/linkease/istore.git "$istore_src" main master; then
@@ -417,6 +487,9 @@ plugin_row "FRP frpc/frps" \
 plugin_row "LuCI FRP" \
   "$(pkg_ver "package/luci-app-frpc/Makefile" "package/luci-app-frps/Makefile")" \
   "$(git_date "${frp_luci_dir:-}")" "https://github.com/laipeng668/luci (frp)"
+plugin_row "Mihomo 内核" \
+  "OpenClash core master" \
+  "$(date -u +%F)" "https://github.com/vernesong/OpenClash/tree/core/master/meta"
 plugin_row "iStore (luci-app-store)" \
   "$(pkg_ver "package/luci-app-store/Makefile")" \
   "$(git_date "$istore_src")" "https://github.com/linkease/istore"
@@ -508,4 +581,4 @@ grep -q '^CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-cr6608=y$' "$MAIN_
 safe_rm tmp/.packageinfo tmp/.targetinfo tmp/.packageauxvars
 
 log "定制完成，当前关键项："
-grep -E '^CONFIG_PACKAGE_(kmod-tun|kmod-nft-bridge|kmod-ebtables|kmod-ebtables-ipv4|kmod-ebtables-ipv6|kmod-br-netfilter|ebtables-legacy|ebtables-legacy-utils|luci-theme-argon|luci-app-argon-config|luci-theme-aurora|zerotier|luci-app-zerotier|easytier|easytier-noweb|luci-app-easytier|ddns-go|luci-app-ddns-go|frpc|frps|luci-app-frpc|luci-app-frps|luci-app-store|luci-app-wechatpush|xray-core|v2ray-core)=' "$MAIN_CONFIG" || true
+grep -E '^CONFIG_PACKAGE_(kmod-tun|mihomo-core|kmod-nft-bridge|kmod-ebtables|kmod-ebtables-ipv4|kmod-ebtables-ipv6|kmod-br-netfilter|ebtables-legacy|ebtables-legacy-utils|luci-theme-argon|luci-app-argon-config|luci-theme-aurora|zerotier|luci-app-zerotier|easytier|easytier-noweb|luci-app-easytier|ddns-go|luci-app-ddns-go|frpc|frps|luci-app-frpc|luci-app-frps|luci-app-store|luci-app-wechatpush|xray-core|v2ray-core)=' "$MAIN_CONFIG" || true
