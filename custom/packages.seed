@@ -32,6 +32,10 @@ CONFIG_PACKAGE_luci-app-easytier=y
 CONFIG_PACKAGE_zerotier=y
 CONFIG_PACKAGE_luci-app-zerotier=y
 
+# ---- AdGuardHome 已禁用（减少固件/overlay 占用）----
+# CONFIG_PACKAGE_adguardhome is not set
+# CONFIG_PACKAGE_luci-app-adguardhome is not set
+
 # ---- OpenClash Mihomo 内核（构建时从官方 core/master 获取）----
 CONFIG_PACKAGE_mihomo-core=y
 
