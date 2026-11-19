@@ -154,6 +154,11 @@ config_set "$MAIN_CONFIG" CONFIG_PACKAGE_kmod-tun y
 config_set "$MAIN_CONFIG" CONFIG_PACKAGE_luci-theme-aurora n
 config_set "$MAIN_CONFIG" CONFIG_PACKAGE_luci-app-aurora-config n
 
+# 用户要求移除 AdGuardHome，禁止从 seed/上游依赖重新拉回。
+config_set "$MAIN_CONFIG" CONFIG_PACKAGE_adguardhome n
+config_set "$MAIN_CONFIG" CONFIG_PACKAGE_luci-app-adguardhome n
+log "已强制禁用 AdGuardHome（释放固件/overlay 空间）"
+
 # 桥接防火墙硬需求：透明网桥 / 上游 DHCP 屏蔽需要 nft bridge 和 ebtables。
 # 即使 packages.seed 被上游或手工改漏，这里也会在每次源码同步后重新写回。
 for sym in \
