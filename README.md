@@ -23,6 +23,8 @@
 - luci-app-argon-config
 - kmod-tun
 - mihomo-core（OpenClash 预装 Mihomo 内核）
+- xray-bin（PassWall 预装 Xray 26.11.9）
+- sing-box-bin（PassWall 预装 sing-box 1.14.4）
 - kmod-nft-bridge
 - kmod-ebtables
 - kmod-ebtables-ipv4
