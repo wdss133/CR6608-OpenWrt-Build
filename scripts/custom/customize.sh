@@ -404,6 +404,148 @@ else
   config_set "$MAIN_CONFIG" CONFIG_PACKAGE_mihomo-core n
 fi
 
+# --- PassWall 最新插件 + Xray/Sing-box 预编译核心 ---
+# 新版 PassWall 的 Xray/Sing-box 源码包要求 Go 1.27+，而 24.10 只有 Go 1.23；
+# 因此插件用最新源码，核心改为官方 mipsle 预编译二进制，避免源码编译失败。
+passwall_dir="$SOURCE_TMP/passwall-latest"
+if fetch_repo https://github.com/Openwrt-Passwall/openwrt-passwall.git "$passwall_dir" main; then
+  if [ -f "$passwall_dir/luci-app-passwall/Makefile" ]; then
+    safe_rm feeds/luci/applications/luci-app-passwall package/feeds/luci/luci-app-passwall package/luci-app-passwall
+    cp -a "$passwall_dir/luci-app-passwall" package/luci-app-passwall
+    rm -rf package/luci-app-passwall/.git package/luci-app-passwall/.github
+    config_set "$MAIN_CONFIG" CONFIG_PACKAGE_luci-app-passwall y
+    for opt in INCLUDE_Xray INCLUDE_SingBox INCLUDE_Hysteria INCLUDE_Geoview; do
+      config_set "$MAIN_CONFIG" "CONFIG_PACKAGE_luci-app-passwall_${opt}" n
+    done
+    log "  已更新 luci-app-passwall 到官方 main"
+  else
+    warn "PassWall 仓库结构变化，未找到 luci-app-passwall/Makefile，保留当前版本"
+  fi
+else
+  warn "PassWall 最新源码获取失败，保留 feed 当前版本"
+fi
+
+# 旧 xray-core/sing-box 包会安装旧二进制并与预编译核心冲突，明确关闭。
+config_set "$MAIN_CONFIG" CONFIG_PACKAGE_xray-core n
+config_set "$MAIN_CONFIG" CONFIG_PACKAGE_sing-box n
+
+xray_dir="$SOURCE_TMP/xray-bin"
+if [ "$ARCH_NAME" = "mipsel" ]; then
+  mkdir -p "$xray_dir" package/xray-bin/files
+  if curl -fLsS --connect-timeout 30 --retry 3 \
+      "https://github.com/XTLS/Xray-core/releases/download/v26.11.9/Xray-linux-mips32le.zip" \
+      -o "$xray_dir/xray.zip"; then
+    if unzip -p "$xray_dir/xray.zip" xray_softfloat > package/xray-bin/files/xray 2>/dev/null \
+       || unzip -p "$xray_dir/xray.zip" xray > package/xray-bin/files/xray 2>/dev/null; then
+      chmod 0755 package/xray-bin/files/xray
+      cat > package/xray-bin/Makefile <<'EOF'
+include $(TOPDIR)/rules.mk
+
+PKG_NAME:=xray-bin
+PKG_VERSION:=26.11.9
+PKG_RELEASE:=1
+PKG_LICENSE:=MPL-2.0
+
+include $(INCLUDE_DIR)/package.mk
+
+define Build/Prepare
+	mkdir -p $(PKG_BUILD_DIR)
+endef
+
+define Build/Compile
+endef
+
+define Package/xray-bin
+	SECTION:=net
+	CATEGORY:=Network
+	TITLE:=Xray-core prebuilt binary for PassWall
+	DEPENDS:=@mipsel +ca-bundle
+	PKGARCH:=$(ARCH_PACKAGES)
+endef
+
+define Package/xray-bin/description
+	Prebuilt Xray-core 26.11.9 (mips32le softfloat) for PassWall.
+endef
+
+define Package/xray-bin/install
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(CURDIR)/files/xray $(1)/usr/bin/xray
+endef
+
+$(eval $(call BuildPackage,xray-bin))
+EOF
+      config_set "$MAIN_CONFIG" CONFIG_PACKAGE_xray-bin y
+      log "  已加入 Xray 26.11.9 预编译核心"
+    else
+      die "Xray 压缩包中未找到可执行文件"
+    fi
+  else
+    die "Xray 26.11.9 mips32le 下载失败"
+  fi
+else
+  warn "当前架构不是 mipsel，跳过 Xray 预编译核心"
+fi
+
+singbox_dir="$SOURCE_TMP/sing-box-bin"
+if [ "$ARCH_NAME" = "mipsel" ]; then
+  mkdir -p "$singbox_dir" package/sing-box-bin/files
+  if curl -fLsS --connect-timeout 30 --retry 3 \
+      "https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-mipsle-softfloat.tar.gz" \
+      -o "$singbox_dir/sing-box.tar.gz"; then
+    mkdir -p "$singbox_dir/extract"
+    tar -xzf "$singbox_dir/sing-box.tar.gz" -C "$singbox_dir/extract"
+    singbox_bin="$(find "$singbox_dir/extract" -type f -name sing-box -print -quit)"
+    if [ -n "$singbox_bin" ]; then
+      cp -f "$singbox_bin" package/sing-box-bin/files/sing-box
+      chmod 0755 package/sing-box-bin/files/sing-box
+      cat > package/sing-box-bin/Makefile <<'EOF'
+include $(TOPDIR)/rules.mk
+
+PKG_NAME:=sing-box-bin
+PKG_VERSION:=1.14.4
+PKG_RELEASE:=1
+PKG_LICENSE:=GPL-3.0
+
+include $(INCLUDE_DIR)/package.mk
+
+define Build/Prepare
+	mkdir -p $(PKG_BUILD_DIR)
+endef
+
+define Build/Compile
+endef
+
+define Package/sing-box-bin
+	SECTION:=net
+	CATEGORY:=Network
+	TITLE:=sing-box prebuilt binary for PassWall
+	DEPENDS:=@mipsel +ca-bundle
+	PKGARCH:=$(ARCH_PACKAGES)
+endef
+
+define Package/sing-box-bin/description
+	Prebuilt sing-box 1.14.4 (mipsle softfloat) for PassWall.
+endef
+
+define Package/sing-box-bin/install
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(CURDIR)/files/sing-box $(1)/usr/bin/sing-box
+endef
+
+$(eval $(call BuildPackage,sing-box-bin))
+EOF
+      config_set "$MAIN_CONFIG" CONFIG_PACKAGE_sing-box-bin y
+      log "  已加入 sing-box 1.14.4 预编译核心"
+    else
+      die "sing-box 压缩包中未找到可执行文件"
+    fi
+  else
+    die "sing-box 1.14.4 mipsle 下载失败"
+  fi
+else
+  warn "当前架构不是 mipsel，跳过 sing-box 预编译核心"
+fi
+
 # --- iStore：4 个子包放到 package/ 顶层（与参考项目已验证的落位一致）---
 istore_src="$SOURCE_TMP/istore"
 if fetch_repo https://github.com/linkease/istore.git "$istore_src" main master; then
@@ -490,6 +632,12 @@ plugin_row "LuCI FRP" \
 plugin_row "Mihomo 内核" \
   "OpenClash core master" \
   "$(date -u +%F)" "https://github.com/vernesong/OpenClash/tree/core/master/meta"
+plugin_row "Xray-core" \
+  "26.11.9" \
+  "预编译 mips32le" "https://github.com/XTLS/Xray-core"
+plugin_row "sing-box" \
+  "1.14.4" \
+  "预编译 mipsle-softfloat" "https://github.com/SagerNet/sing-box"
 plugin_row "iStore (luci-app-store)" \
   "$(pkg_ver "package/luci-app-store/Makefile")" \
   "$(git_date "$istore_src")" "https://github.com/linkease/istore"
@@ -581,4 +729,4 @@ grep -q '^CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-cr6608=y$' "$MAIN_
 safe_rm tmp/.packageinfo tmp/.targetinfo tmp/.packageauxvars
 
 log "定制完成，当前关键项："
-grep -E '^CONFIG_PACKAGE_(kmod-tun|mihomo-core|kmod-nft-bridge|kmod-ebtables|kmod-ebtables-ipv4|kmod-ebtables-ipv6|kmod-br-netfilter|ebtables-legacy|ebtables-legacy-utils|luci-theme-argon|luci-app-argon-config|luci-theme-aurora|zerotier|luci-app-zerotier|easytier|easytier-noweb|luci-app-easytier|ddns-go|luci-app-ddns-go|frpc|frps|luci-app-frpc|luci-app-frps|luci-app-store|luci-app-wechatpush|xray-core|v2ray-core)=' "$MAIN_CONFIG" || true
+grep -E '^CONFIG_PACKAGE_(kmod-tun|mihomo-core|xray-bin|sing-box-bin|kmod-nft-bridge|kmod-ebtables|kmod-ebtables-ipv4|kmod-ebtables-ipv6|kmod-br-netfilter|ebtables-legacy|ebtables-legacy-utils|luci-theme-argon|luci-app-argon-config|luci-theme-aurora|zerotier|luci-app-zerotier|easytier|easytier-noweb|luci-app-easytier|ddns-go|luci-app-ddns-go|frpc|frps|luci-app-frpc|luci-app-frps|luci-app-store|luci-app-wechatpush|xray-core|v2ray-core)=' "$MAIN_CONFIG" || true
