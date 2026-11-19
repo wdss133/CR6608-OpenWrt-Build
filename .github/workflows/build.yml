@@ -254,13 +254,17 @@ jobs:
 
         # 关键包硬校验：这些缺一个固件就不完整
         fail=0
-        for p in xray-bin sing-box-bin v2ray-geoip v2ray-geosite adguardhome luci-app-passwall luci-app-openclash luci-theme-argon kmod-tun frpc frps luci-app-frpc luci-app-frps kmod-nft-bridge kmod-ebtables kmod-ebtables-ipv4 kmod-ebtables-ipv6 kmod-br-netfilter ebtables-legacy ebtables-legacy-utils mihomo-core; do
+        for p in xray-bin sing-box-bin v2ray-geoip v2ray-geosite luci-app-passwall luci-app-openclash luci-theme-argon kmod-tun frpc frps luci-app-frpc luci-app-frps kmod-nft-bridge kmod-ebtables kmod-ebtables-ipv4 kmod-ebtables-ipv6 kmod-br-netfilter ebtables-legacy ebtables-legacy-utils mihomo-core; do
           if ! grep -q "^CONFIG_PACKAGE_${p}=y" .config; then
             echo "::error::关键包未选中: ${p}"
             fail=1
           fi
         done
         grep -q '^CONFIG_PACKAGE_v2ray-core=y' .config && { echo "::error::v2ray-core 不应被选中"; fail=1; }
+        if grep -qE '^CONFIG_PACKAGE_(adguardhome|luci-app-adguardhome)=y' .config; then
+          echo "::error::AdGuardHome 已按需求禁用，不能出现在 .config"
+          fail=1
+        fi
         [ "$fail" -eq 0 ] || exit 1
         echo "关键包校验通过"
 
