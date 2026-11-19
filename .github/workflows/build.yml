@@ -254,7 +254,7 @@ jobs:
 
         # 关键包硬校验：这些缺一个固件就不完整
         fail=0
-        for p in xray-core v2ray-geoip v2ray-geosite adguardhome luci-app-passwall luci-app-openclash luci-theme-argon kmod-tun frpc frps luci-app-frpc luci-app-frps kmod-nft-bridge kmod-ebtables kmod-ebtables-ipv4 kmod-ebtables-ipv6 kmod-br-netfilter ebtables-legacy ebtables-legacy-utils; do
+        for p in xray-core v2ray-geoip v2ray-geosite adguardhome luci-app-passwall luci-app-openclash luci-theme-argon kmod-tun frpc frps luci-app-frpc luci-app-frps kmod-nft-bridge kmod-ebtables kmod-ebtables-ipv4 kmod-ebtables-ipv6 kmod-br-netfilter ebtables-legacy ebtables-legacy-utils mihomo-core; do
           if ! grep -q "^CONFIG_PACKAGE_${p}=y" .config; then
             echo "::error::关键包未选中: ${p}"
             fail=1
