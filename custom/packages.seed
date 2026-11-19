@@ -32,6 +32,9 @@ CONFIG_PACKAGE_luci-app-easytier=y
 CONFIG_PACKAGE_zerotier=y
 CONFIG_PACKAGE_luci-app-zerotier=y
 
+# ---- OpenClash Mihomo 内核（构建时从官方 core/master 获取）----
+CONFIG_PACKAGE_mihomo-core=y
+
 # ---- ddns-go ----
 CONFIG_PACKAGE_ddns-go=y
 CONFIG_PACKAGE_luci-app-ddns-go=y
