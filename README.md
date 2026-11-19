@@ -85,7 +85,7 @@
 | 插件不支持本机架构 | 读插件 Makefile 的架构白名单与 `APP_ARCH` 映射，不支持就跳过并告警 |
 | Go 插件跟进新版 Go（如 ddns-go 6.13+ 要求 go ≥ 1.25） | **自动回退**到与源码树 golang 兼容的版本，现算 `PKG_HASH` 写回；找不到才跳过 |
 | 包名写错 / PROVIDES 虚拟名 | defconfig 前后比对，被静默丢弃的包会在日志里列出（warning） |
-| 关键包缺失 | xray-core / geoip / geosite / adguardhome / passwall / openclash / argon / kmod-tun 硬校验，缺失即失败 |
+| 关键包缺失 | xray-bin / sing-box-bin / geoip / geosite / passwall / openclash / argon / kmod-tun 硬校验，缺失即失败；AdGuardHome 强制禁用 |
 | 主题被上游换掉 | 幂等切换回 argon，并用 `uci-defaults` 兜底 |
 
 > 只要 `custom/` 与 `scripts/custom/` 这几个文件还在，换分支 / 重新 fork 后都能照旧自动跑；
