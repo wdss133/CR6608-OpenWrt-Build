@@ -75,15 +75,18 @@ def main():
                 packages.add(line.split(" - ", 1)[0].strip())
         required = {
             "base-files", "procd", "fstools", "mtd", "ubi-utils", "netifd",
-            "xray-core", "luci-app-passwall", "luci-app-openclash", "kmod-tun",
+            "xray-bin", "sing-box-bin", "luci-app-passwall", "luci-app-openclash", "kmod-tun",
         }
         missing = sorted(required - packages)
         assert not missing, f"正式系统 manifest 缺少关键包: {missing}"
         assert "v2ray-core" not in packages, "正式系统不应含 v2ray-core"
+        forbidden_full = {"adguardhome", "luci-app-adguardhome"}
+        present_full = sorted(forbidden_full & packages)
+        assert not present_full, f"正式系统不应含 AdGuardHome: {present_full}"
         report["full_system_required_packages"] = "PASS"
     rescue_manifest = root / "initramfs.manifest"
     if rescue_manifest.is_file():
-        forbidden = ("adguardhome", "xray-core", "zerotier", "ddns-go", "luci-app-passwall")
+        forbidden = ("adguardhome", "xray-core", "xray-bin", "sing-box-bin", "zerotier", "ddns-go", "luci-app-passwall")
         content = rescue_manifest.read_text(encoding="utf-8")
         present = [p for p in forbidden if re.search(rf"^{re.escape(p)} - ", content, re.M)]
         assert not present, f"救援盘不应包含完整服务: {present}"
